@@ -56,12 +56,12 @@ banner() {
   echo -e "${BLUE}${BOLD}"
   echo "  ╔════════════════════════════════════════════════════════════════╗"
   echo "  ║                                                                ║"
-  echo "  ║    ██████╗ ██╗   ██╗ ██████╗  ██████╗                        ║"
-  echo "  ║    ██╔══██╗╚██╗ ██╔╝██╔═══██╗██╔════╝                        ║"
-  echo "  ║    ██████╔╝ ╚████╔╝ ██║   ██║██║                             ║"
-  echo "  ║    ██╔══██╗  ╚██╔╝  ██║   ██║██║                             ║"
-  echo "  ║    ██████╔╝   ██║   ╚██████╔╝╚██████╗                        ║"
-  echo "  ║    ╚═════╝    ╚═╝    ╚═════╝  ╚═════╝  CloudPrem Lab Installer║"
+  echo "  ║    ██████╗ ██╗   ██╗ ██████╗  ██████╗                          ║"
+  echo "  ║    ██╔══██╗╚██╗ ██╔╝██╔═══██╗██╔════╝                          ║"
+  echo "  ║    ██████╔╝ ╚████╔╝ ██║   ██║██║                               ║"
+  echo "  ║    ██╔══██╗  ╚██╔╝  ██║   ██║██║                               ║"
+  echo "  ║    ██████╔╝   ██║   ╚██████╔╝╚██████╗                          ║"
+  echo "  ║    ╚═════╝    ╚═╝    ╚═════╝  ╚═════╝  CloudPrem Lab Installer ║"
   echo "  ║                                                                ║"
   echo "  ╚════════════════════════════════════════════════════════════════╝"
   echo -e "${NC}"
@@ -270,10 +270,18 @@ ssm_run() {
   local t0=$SECONDS output
   output=$(_ssm_send "$instance" "$script_file") || {
     spin_stop
-    abort "Remote command failed.\n\n${output}"
+    local logfile="${CKPT_DIR}/error_$(basename "$script_file" .sh)_$(date +%H%M%S).log"
+    echo "$output" > "$logfile"
+    echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n"
+    echo -e "${DIM}  Last output:${NC}"
+    echo "$output" | tail -20 | while IFS= read -r line; do
+      echo -e "  ${DIM}${line}${NC}"
+    done
+    echo -e "\n  ${DIM}Full log saved to: ${logfile}${NC}\n"
+    printf "${SHOW_CURSOR}"
+    exit 1
   }
   spin_stop "${label}"
-  [[ -n "$output" ]] && echo -e "${DIM}${output}${NC}" >&2
   echo $((SECONDS - t0))
 }
 
