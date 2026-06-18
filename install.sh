@@ -396,9 +396,12 @@ kubeadm init \
   --ignore-preflight-errors=NumCPU 2>&1 | tail -5
 mkdir -p /root/.kube
 cp /etc/kubernetes/admin.conf /root/.kube/config
-# Ensure kubeconfig always uses private IP regardless of what kubeadm wrote
 sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
-# Wait for node to register before removing taint
+echo "=== waiting for API server ==="
+for i in \$(seq 1 24); do
+  kubectl get nodes 2>/dev/null && break
+  sleep 5
+done
 kubectl wait node --for=condition=Ready=False --timeout=60s 2>/dev/null || true
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null || true
 kubectl get nodes
