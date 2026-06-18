@@ -773,15 +773,13 @@ else
 
   ask "Datadog site"                            "datadoghq.com" DD_SITE
   echo ""
+  local deploy_id
+  deploy_id=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 6)
   echo -e "  ${DIM}The next two values determine your Datadog cluster identifier:${NC}"
   echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
-  echo -e "  ${DIM}  e.g. byoclogs-byoclogs-cloudprem${NC}"
   echo -e "  ${DIM}  This is how the cluster appears in app.datadoghq.com/byoc-logs${NC}"
-  echo -e "  ${YELLOW}  Tip: if a cluster with this name already exists in your org,${NC}"
-  echo -e "  ${YELLOW}  Datadog will append a random suffix (e.g. -680d109e). Use a${NC}"
-  echo -e "  ${YELLOW}  unique name per run to avoid this, or expect the suffix.${NC}"
   echo ""
-  ask "Cluster name in Datadog"                 "cloudprem"     CLUSTER_NAME
+  ask "Cluster name in Datadog"                 "cloudprem-${deploy_id}"     CLUSTER_NAME
   ask "Kubernetes namespace"                    "byoclogs"      NAMESPACE
   ask "S3 bucket name"                          "byoclogs"      BUCKET
   ask "PostgreSQL database / user"              "byoclogs"      PG_USER
