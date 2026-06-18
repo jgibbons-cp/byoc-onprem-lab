@@ -22,7 +22,7 @@ ckpt_done() { [[ -f "$CKPT_DIR/$1" ]]; }
 
 # ── UI: Core Helpers ──────────────────────────────────────────────────────────
 _pad() { printf '%*s' "$1" ''; }
-_hr()  { printf '%*s\n' "$TERM_WIDTH" '' | tr ' ' "${1:─}"; }
+_hr()  { printf '%*s\n' "$TERM_WIDTH" '' | tr ' ' "${1:--}"; }
 
 banner() {
   clear
