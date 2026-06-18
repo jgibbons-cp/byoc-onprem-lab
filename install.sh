@@ -411,13 +411,16 @@ REMOTE
 write_phase2() { cat > /tmp/byoc_p2.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
+echo "=== adding cilium helm repo ==="
 helm repo add cilium https://helm.cilium.io/ --force-update 2>/dev/null || helm repo update
+echo "=== installing cilium v1.17.4 ==="
 helm upgrade --install cilium cilium/cilium \
   --version 1.17.4 \
   --namespace kube-system \
   --set k8sServiceHost=${K8S_IP} \
   --set k8sServicePort=6443 \
   --wait --timeout=3m
+echo "=== waiting for node Ready ==="
 kubectl wait node --all --for=condition=Ready --timeout=180s
 kubectl get nodes
 REMOTE
@@ -544,11 +547,13 @@ janitor:
   extraEnvFrom:
     - secretRef: {name: byoc-logs-minio-credentials}
 EOF
+echo "=== deploying cloudprem helm chart ==="
 helm upgrade --install ${NAMESPACE} datadog/cloudprem -f /tmp/ddvals.yaml -n ${NAMESPACE}
-echo "=== waiting for pods ==="
+echo "=== waiting for all pods Ready (up to 5 min) ==="
 kubectl wait --for=condition=Ready pod \
   -l app.kubernetes.io/instance=${NAMESPACE} \
   -n ${NAMESPACE} --timeout=300s 2>&1 | tail -3
+echo "=== pod status ==="
 kubectl get pods -n ${NAMESPACE}
 REMOTE
 }
@@ -556,6 +561,7 @@ REMOTE
 write_phase6() { cat > /tmp/byoc_p6.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
+echo "=== installing datadog operator ==="
 helm upgrade --install datadog-operator datadog/datadog-operator -n ${NAMESPACE} --wait --timeout=2m
 cat > /tmp/dda.yaml << 'EOF'
 apiVersion: datadoghq.com/v2alpha1
@@ -731,6 +737,10 @@ else
   phase_done "Kubernetes bootstrap" "$elapsed"
 fi
 
+echo ""
+echo -e "  ${GREEN}Node is up. Cilium will bring it to Ready state.${NC}"
+pause
+
 # ── Phase 2: Cilium ───────────────────────────────────────────────────────────
 section "Phase 2 — Cilium CNI" "②"
 arch_diagram "cilium"
@@ -751,6 +761,10 @@ else
   ckpt_set "phase2"
   phase_done "Cilium CNI" "$elapsed"
 fi
+
+echo ""
+echo -e "  ${GREEN}Node is Ready. Next: storage layer + PostgreSQL (parallel, ~5 min).${NC}"
+pause
 
 # ── Phase 3+4 (parallel): Storage + PostgreSQL ────────────────────────────────
 section "Phase 3 — Storage  ·  Phase 4 — PostgreSQL  (parallel)" "③④"
@@ -821,6 +835,12 @@ else
   spin_stop "Metastore URI secret created"
 fi
 
+echo ""
+echo -e "  ${GREEN}Storage and PostgreSQL ready. Next: CloudPrem helm install (~3 min).${NC}"
+echo -e "  ${DIM}  SeaweedFS S3 endpoint:  seaweedfs-s3.seaweedfs.svc.cluster.local:8333${NC}"
+echo -e "  ${DIM}  PostgreSQL metastore:   ${PG_IP}:5432/${PG_USER}${NC}"
+pause
+
 # ── Phase 5: CloudPrem ────────────────────────────────────────────────────────
 section "Phase 5 — CloudPrem" "⑤"
 arch_diagram "cloudprem"
@@ -876,6 +896,10 @@ else
   ckpt_set "phase6"
   phase_done "Datadog Operator + Agent" "$elapsed"
 fi
+
+echo ""
+echo -e "  ${GREEN}All components deployed. Review pod status above before continuing.${NC}"
+pause
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 arch_diagram "done"
