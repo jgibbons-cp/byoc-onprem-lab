@@ -245,18 +245,20 @@ validate_creds() {
     > /dev/null 2>&1 && return 0
 
   echo ""
-  warn "AWS credentials expired. Paste your fresh export block below."
-  warn "Get them from the AWS SSO portal, paste all 3 lines, then press Enter on a blank line."
+  warn "AWS credentials expired."
   echo ""
-  local line
-  while IFS= read -r line && [[ -n "$line" ]]; do
-    eval "$line" 2>/dev/null || true
-  done
-  aws configure set aws_access_key_id     "$AWS_ACCESS_KEY_ID"     --profile "$PROFILE"
-  aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile "$PROFILE"
-  aws configure set aws_session_token     "$AWS_SESSION_TOKEN"     --profile "$PROFILE"
+  echo -e "  In a ${WHITE}separate terminal window${NC}, run:"
+  echo -e "  ${CYAN}  aws configure set aws_access_key_id     \"\$AWS_ACCESS_KEY_ID\"     --profile ${PROFILE}${NC}"
+  echo -e "  ${CYAN}  aws configure set aws_secret_access_key \"\$AWS_SECRET_ACCESS_KEY\" --profile ${PROFILE}${NC}"
+  echo -e "  ${CYAN}  aws configure set aws_session_token     \"\$AWS_SESSION_TOKEN\"     --profile ${PROFILE}${NC}"
+  echo ""
+  echo -e "  Get fresh credentials from the ${WHITE}AWS SSO portal${NC} first (export the 3 lines),"
+  echo -e "  then run the aws configure set commands above, then come back here."
+  echo ""
+  echo -e -n "  ${YELLOW}Press ${WHITE}[Enter]${YELLOW} once credentials are refreshed...${NC}"
+  read -r < /dev/tty
   aws sts get-caller-identity --profile "$PROFILE" --region "$REGION" > /dev/null 2>&1 \
-    || abort "Credentials still invalid."
+    || abort "Credentials still invalid. Re-run the installer after refreshing."
   success "Credentials refreshed."
 }
 
