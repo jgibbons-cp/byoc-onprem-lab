@@ -15,7 +15,10 @@ HIDE_CURSOR='\033[?25l'; SHOW_CURSOR='\033[?25h'
 trap 'printf "${SHOW_CURSOR}"; stty echo 2>/dev/null; exit' INT TERM EXIT
 
 # ── Checkpoint System (resume after failure) ──────────────────────────────────
-CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_$$"
+# CKPT_DIR is keyed to the K8S instance ID after selection so the same node
+# can be resumed across separate invocations. Initialized with a stable default
+# here; re-keyed below once K8S_INSTANCE is known.
+CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_default"
 mkdir -p "$CKPT_DIR"
 ckpt_set()  { touch "$CKPT_DIR/$1"; }
 ckpt_done() { [[ -f "$CKPT_DIR/$1" ]]; }
@@ -112,8 +115,10 @@ pause() {
 ask() {
   local prompt="$1" default="$2" varname="$3" resp
   if [[ "${BYOC_YES:-}" == "1" ]]; then
-    printf -v "$varname" '%s' "$default"
-    printf "  ${WHITE}%-40s${NC}${DIM}[${default}]${NC}: ${DIM}%s (auto)${NC}\n" "$prompt" "$default"
+    local envvar="BYOC_${varname}"
+    local val="${!envvar:-$default}"
+    printf -v "$varname" '%s' "$val"
+    printf "  ${WHITE}%-40s${NC}${DIM}[${val}]${NC}: ${DIM}%s (auto)${NC}\n" "$prompt" "$val"
     return
   fi
   if [[ -n "$default" ]]; then
@@ -129,8 +134,10 @@ ask() {
 ask_secret() {
   local prompt="$1" varname="$2" resp
   if [[ "${BYOC_YES:-}" == "1" ]]; then
-    resp="${!varname:-}"
-    [[ -z "$resp" ]] && abort "$prompt must be set via env var when BYOC_YES=1 (e.g. export $varname=...)"
+    local envvar="BYOC_${varname}"
+    resp="${!envvar:-${!varname:-}}"
+    [[ -z "$resp" ]] && abort "$prompt must be set via BYOC_${varname} when BYOC_YES=1"
+    printf -v "$varname" '%s' "$resp"
     printf "  ${WHITE}%-40s${NC}: ${DIM}******* (env)${NC}\n" "$prompt"
     return
   fi
@@ -195,6 +202,7 @@ PY
     return 1
   }
 
+  local poll_count=0
   while true; do
     local status
     status=$(aws ssm get-command-invocation \
@@ -202,6 +210,11 @@ PY
       --region "$REGION" --profile "$PROFILE" \
       --query "Status" --output text 2>/dev/null) || status="InProgress"
     [[ "$status" != "InProgress" && "$status" != "Pending" ]] && break
+    ((poll_count++)) || true
+    if [[ "$poll_count" -ge 300 ]]; then
+      echo "SSM_TIMEOUT: command $cmd_id still running after 15 minutes"
+      return 1
+    fi
     sleep 3
   done
 
@@ -228,7 +241,7 @@ ssm_run() {
     abort "Remote command failed.\n\n${output}"
   }
   spin_stop "${label}"
-  [[ -n "$output" ]] && echo -e "${DIM}${output}${NC}"
+  [[ -n "$output" ]] && echo -e "${DIM}${output}${NC}" >&2
   echo $((SECONDS - t0))
 }
 
@@ -366,6 +379,8 @@ echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.
 apt-get update -qq
 apt-get install -y -qq kubelet kubeadm kubectl
 apt-mark hold kubelet kubeadm kubectl
+echo "=== helm ==="
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 echo "=== kubeadm init ==="
 kubeadm init \
   --control-plane-endpoint=${K8S_IP}:6443 \
@@ -448,7 +463,7 @@ write_phase4() { cat > /tmp/byoc_p4.sh << REMOTE
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 set -e
-apt-get update -qq && apt-get install -y -qq postgresql
+apt-get update -qq && apt-get install -y -qq postgresql-14
 systemctl enable postgresql && systemctl start postgresql
 sudo -u postgres psql -c "CREATE USER ${PG_USER} WITH ENCRYPTED PASSWORD '${PG_PASS}';" 2>/dev/null || true
 sudo -u postgres psql -c "CREATE DATABASE ${PG_USER};" 2>/dev/null || true
@@ -561,6 +576,11 @@ spec:
             fieldRef: {fieldPath: spec.nodeName}
 EOF
 kubectl apply -f /tmp/dda.yaml
+echo "=== waiting for operator to create cluster-agent deployment ==="
+for i in $(seq 1 36); do
+  kubectl get deployment/datadog-cluster-agent -n ${NAMESPACE} 2>/dev/null && break
+  sleep 5
+done
 kubectl wait deployment/datadog-cluster-agent -n ${NAMESPACE} \
   --for=condition=Available --timeout=180s
 kubectl rollout status daemonset/datadog-agent -n ${NAMESPACE} --timeout=180s
@@ -589,13 +609,13 @@ print_dashboard() {
 
   echo -e "  ${WHITE}${BOLD}Verify in Datadog:${NC}"
   echo ""
-  printf "  ${CYAN}1.${NC}  %-55s\n" "https://app.datadoghq.com/byoc-logs"
+  printf "  ${CYAN}1.${NC}  %-55s\n" "https://${DD_SITE}/byoc-logs"
   printf "      ${DIM}%-55s${NC}\n" "→ Your cluster should show: Connected  (Reverse)"
   echo ""
   printf "  ${CYAN}2.${NC}  %-55s\n" "Hover cluster → Search Logs"
   printf "      ${DIM}%-55s${NC}\n" "→ Pod logs appear within ~2 minutes"
   echo ""
-  printf "  ${CYAN}3.${NC}  %-55s\n" "https://app.datadoghq.com/metric/summary?filter=cloudprem"
+  printf "  ${CYAN}3.${NC}  %-55s\n" "https://${DD_SITE}/metric/summary?filter=cloudprem"
   printf "      ${DIM}%-55s${NC}\n" "→ QuickWit internal metrics via DogStatsD"
   echo ""
 
@@ -658,7 +678,16 @@ ask_secret "Datadog API key"                                  DD_API_KEY
 echo ""
 info "Resolving instance IPs..."
 K8S_IP=$(get_private_ip "$K8S_INSTANCE") || abort "Could not resolve IP for $K8S_INSTANCE"
+[[ "$K8S_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || abort "IP lookup returned '${K8S_IP}' for ${K8S_INSTANCE} — check instance ID and region."
 PG_IP=$(get_private_ip "$PG_INSTANCE")   || abort "Could not resolve IP for $PG_INSTANCE"
+[[ "$PG_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || abort "IP lookup returned '${PG_IP}' for ${PG_INSTANCE} — check instance ID and region."
+
+# Re-key checkpoint dir to this specific K8S instance so runs against different
+# nodes don't share state, and re-running the same node resumes correctly.
+CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_${K8S_INSTANCE}"
+mkdir -p "$CKPT_DIR"
 
 S3_KEY=$(openssl rand -hex 10)
 S3_SECRET=$(openssl rand -hex 20)

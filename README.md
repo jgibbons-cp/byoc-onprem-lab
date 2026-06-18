@@ -73,7 +73,7 @@ The script discovers your SSM-registered instances automatically, asks ~10 quest
 | `aws` CLI v2 | All SSM remote execution |
 | `python3` | JSON-encoding SSM parameters |
 
-No `kubectl`, `helm`, or SSH needed locally. Everything runs remotely via AWS SSM SendCommand.
+No `kubectl`, `helm`, or SSH needed locally. Everything runs remotely via AWS SSM SendCommand. The installer installs `helm`, `kubectl`, `kubeadm`, and `kubelet` on the remote Kubernetes node automatically.
 
 ### AWS — launch before running the script
 
@@ -111,11 +111,33 @@ Phase 6  Datadog Agent            Operator + DatadogAgent CRD, log collection ac
 ### Smart features
 
 - **Instance discovery** — lists your online SSM instances, pick by number
-- **Checkpoint/resume** — completed phases are skipped on re-run, safe to retry after failure
+- **Checkpoint/resume** — completed phases are skipped on re-run, safe to retry after failure; keyed to the Kubernetes instance ID so separate instances don't share state
 - **Parallel execution** — PostgreSQL installs on the t3.micro while SeaweedFS deploys on the k8s node; saves ~3 minutes
 - **Live spinner** — animated progress on every remote operation
 - **Credential refresh** — detects expired STS tokens and pauses for you to paste fresh credentials
 - **Architecture diagram** — each phase shows the full stack with the current component highlighted
+
+### Non-interactive mode (`BYOC_YES=1`)
+
+For automated testing or scripted deployments, set `BYOC_YES=1` and provide values as `BYOC_<VARNAME>` environment variables. Unset variables fall back to their defaults.
+
+```bash
+export BYOC_YES=1
+export BYOC_PROFILE=byoc           # default: byoc
+export BYOC_REGION=us-east-1       # default: us-east-1
+export BYOC_K8S_INSTANCE=i-0abc123...   # required — no default
+export BYOC_PG_INSTANCE=i-0def456...    # required — no default
+export BYOC_DD_SITE=datadoghq.com  # default: datadoghq.com
+export BYOC_CLUSTER_NAME=cloudprem # default: cloudprem
+export BYOC_NAMESPACE=byoclogs     # default: byoclogs
+export BYOC_BUCKET=byoclogs        # default: byoclogs
+export BYOC_PG_USER=byoclogs       # default: byoclogs
+export BYOC_PG_PASS=byoclogs       # default: byoclogs
+export BYOC_DD_API_KEY=<your-api-key>   # required — no default
+bash install.sh
+```
+
+The script aborts if `BYOC_K8S_INSTANCE`, `BYOC_PG_INSTANCE`, or `BYOC_DD_API_KEY` are missing.
 
 ---
 
@@ -137,11 +159,13 @@ This installer fixes issues discovered during full verbatim validation. See [doc
 
 ## Verification
 
-After the script completes:
+After the script completes, the finish screen shows the correct URLs for your `DD_SITE`. For `datadoghq.com`:
 
 1. **[app.datadoghq.com/byoc-logs](https://app.datadoghq.com/byoc-logs)** — cluster appears as `Connected`, type `Reverse`
 2. Hover cluster → **Search Logs** — pod logs appear within ~2 minutes
 3. **[cloudprem metrics](https://app.datadoghq.com/metric/summary?filter=cloudprem)** — QuickWit internal metrics via DogStatsD
+
+> **Important:** The `logs-cloudprem` feature flag must be enabled on your org before the reverse connection will activate. Ask your Datadog contact or Mosaic admin: [mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem](https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem)
 
 ---
 
