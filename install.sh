@@ -141,9 +141,16 @@ ask_secret() {
     printf "  ${WHITE}%-40s${NC}: ${DIM}******* (env)${NC}\n" "$prompt"
     return
   fi
-  printf "  ${WHITE}%-40s${NC}: " "$prompt"
+  local existing="${!varname:-}"
+  if [[ -n "$existing" ]]; then
+    printf "  ${WHITE}%-40s${NC}${DIM}[set - Enter to keep, or type new]${NC}: " "$prompt"
+  else
+    printf "  ${WHITE}%-40s${NC}${DIM}[required]${NC}: " "$prompt"
+  fi
   stty -echo 2>/dev/null; read -re resp < /dev/tty; stty echo 2>/dev/null
   echo ""
+  [[ -z "$resp" && -n "$existing" ]] && resp="$existing"
+  [[ -z "$resp" ]] && abort "$prompt is required."
   printf -v "$varname" '%s' "$resp"
 }
 
