@@ -96,12 +96,12 @@ This tells Cilium's init container to contact the API server directly via the no
 kubeadm init --control-plane-endpoint=<PRIVATE_IP>:6443 ...
 ```
 
-Or patch after the fact:
+And patch immediately after as a belt-and-suspenders guarantee (kubeadm can still write a secondary public IP in some configurations):
 ```bash
-sed -i 's|https://<PUBLIC_IP>:6443|https://<PRIVATE_IP>:6443|g' /root/.kube/config
+sed -i "s|https://.*:6443|https://<PRIVATE_IP>:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
 ```
 
-The TLS certificate issued by kubeadm covers both the public and private IPs, so no cert regeneration is needed.
+The TLS certificate issued by kubeadm covers both the public and private IPs, so no cert regeneration is needed. Both fixes are applied automatically by the installer.
 
 **Article update needed:** Note the kubeconfig public/private IP issue. If SSM is used instead of SSH, the private IP must be used.
 
