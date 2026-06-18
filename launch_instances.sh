@@ -113,9 +113,11 @@ if [[ "$SG_ID" == "None" || -z "$SG_ID" ]]; then
   info "Creating security group '$SG_NAME'..."
   SG_ID=$(aws ec2 create-security-group \
     --group-name "$SG_NAME" \
-    --description "BYOC CloudPrem lab — k8s and postgres nodes" \
+    --description "BYOC CloudPrem lab - k8s and postgres nodes" \
     --region "$REGION" --profile "$PROFILE" \
-    --query "GroupId" --output text)
+    --query "GroupId" --output text) \
+    || abort "Failed to create security group."
+  [[ "$SG_ID" =~ ^sg- ]] || abort "Security group creation returned unexpected value: '$SG_ID'"
 
   # Allow all traffic within the SG (k8s ↔ postgres communication)
   aws ec2 authorize-security-group-ingress \
