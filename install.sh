@@ -12,16 +12,40 @@ RED='\033[0;31m';   GREEN='\033[0;32m';  YELLOW='\033[1;33m'
 BLUE='\033[0;34m';  CYAN='\033[0;36m';   WHITE='\033[1;37m'
 MAGENTA='\033[0;35m'; BOLD='\033[1m';    DIM='\033[2m';  NC='\033[0m'
 HIDE_CURSOR='\033[?25l'; SHOW_CURSOR='\033[?25h'
-trap 'printf "${SHOW_CURSOR}"; stty echo 2>/dev/null; exit' INT TERM EXIT
+trap 'printf "${SHOW_CURSOR}"; stty echo 2>/dev/null; [[ -n "${SPINNER_PID:-}" ]] && kill "$SPINNER_PID" 2>/dev/null; exit' INT TERM EXIT
 
-# ── Checkpoint System (resume after failure) ──────────────────────────────────
-# CKPT_DIR is keyed to the K8S instance ID after selection so the same node
-# can be resumed across separate invocations. Initialized with a stable default
-# here; re-keyed below once K8S_INSTANCE is known.
+# ── Checkpoint + Config Persistence ──────────────────────────────────────────
+# CKPT_DIR is keyed to K8S_INSTANCE after selection. A config.env is saved
+# there so the user only needs to type 3 things on resume (profile, region,
+# instance ID) and everything else is reloaded automatically.
+GLOBAL_LAST="${TMPDIR:-/tmp}/.byoc_last.env"
 CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_default"
 mkdir -p "$CKPT_DIR"
 ckpt_set()  { touch "$CKPT_DIR/$1"; }
 ckpt_done() { [[ -f "$CKPT_DIR/$1" ]]; }
+
+save_config() {
+  cat > "$CKPT_DIR/config.env" << CONF
+PROFILE=${PROFILE}
+REGION=${REGION}
+K8S_INSTANCE=${K8S_INSTANCE}
+PG_INSTANCE=${PG_INSTANCE}
+DD_SITE=${DD_SITE}
+CLUSTER_NAME=${CLUSTER_NAME}
+NAMESPACE=${NAMESPACE}
+BUCKET=${BUCKET}
+PG_USER=${PG_USER}
+PG_PASS=${PG_PASS}
+DD_API_KEY=${DD_API_KEY}
+S3_KEY=${S3_KEY}
+S3_SECRET=${S3_SECRET}
+K8S_IP=${K8S_IP}
+PG_IP=${PG_IP}
+CONF
+  chmod 600 "$CKPT_DIR/config.env"
+  printf "K8S_INSTANCE=%s\nPG_INSTANCE=%s\nPROFILE=%s\nREGION=%s\n" \
+    "$K8S_INSTANCE" "$PG_INSTANCE" "$PROFILE" "$REGION" > "$GLOBAL_LAST"
+}
 
 # ── UI: Core Helpers ──────────────────────────────────────────────────────────
 _pad() { printf '%*s' "$1" ''; }
@@ -298,11 +322,12 @@ list_ssm_instances() {
 
 pick_instance() {
   local role="$1" varname="$2"
-  local rows
+  local rows last_var="LAST_${varname}"
+  local last_id="${!last_var:-}"
   rows=$(list_ssm_instances)
 
   if [[ -z "$rows" ]]; then
-    ask "No SSM instances found. Enter $role instance ID" "" "$varname"
+    ask "No SSM instances found. Enter $role instance ID" "$last_id" "$varname"
     return
   fi
 
@@ -310,7 +335,9 @@ pick_instance() {
   local i=1
   declare -a ids=()
   while IFS=$'\t' read -r id ip name platform; do
-    printf "  ${CYAN}[%d]${NC}  %-22s  ${DIM}%-16s  %s${NC}\n" "$i" "$id" "$ip" "$name"
+    local marker=""
+    [[ "$id" == "$last_id" ]] && marker=" ${GREEN}← last used${NC}"
+    printf "  ${CYAN}[%d]${NC}  %-22s  ${DIM}%-16s  %s${NC}%b\n" "$i" "$id" "$ip" "$name" "$marker"
     ids+=("$id")
     ((i++)) || true
   done <<< "$rows"
@@ -319,14 +346,14 @@ pick_instance() {
   local choice
   if [[ "${BYOC_YES:-}" == "1" ]]; then
     local envvar="BYOC_${varname}"
-    local preset="${!envvar:-}"
+    local preset="${!envvar:-$last_id}"
     [[ -z "$preset" ]] && abort "BYOC_YES=1 requires $envvar env var (instance ID for $role)"
     printf -v "$varname" '%s' "$preset"
     printf "  ${WHITE}%-40s${NC}: ${DIM}%s (env)${NC}\n" "Select $role instance" "$preset"
     return
   fi
-  echo -e "  ${YELLOW}  Tip: type the instance ID directly (i-...) to avoid picking the wrong number.${NC}"
-  ask "Select $role instance number (or paste instance ID)" "" choice
+  echo -e "  ${YELLOW}  Paste the instance ID (i-...) directly — don't rely on the number, the list order changes.${NC}"
+  ask "Select $role instance" "${last_id}" choice
   if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#ids[@]}" ]]; then
     printf -v "$varname" '%s' "${ids[$((choice-1))]}"
   else
@@ -358,6 +385,8 @@ write_phase1() { cat > /tmp/byoc_p1.sh << REMOTE
 #!/bin/bash
 set -e
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 echo "=== reset any existing cluster ==="
 kubeadm reset -f 2>/dev/null || true
 rm -rf /etc/kubernetes /root/.kube /var/lib/etcd /var/lib/kubelet /etc/cni /opt/cni 2>/dev/null || true
@@ -388,7 +417,7 @@ apt-get update -qq
 apt-get install -y -qq kubelet kubeadm kubectl
 apt-mark hold kubelet kubeadm kubectl
 echo "=== helm ==="
-curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+DESIRED_VERSION=v3.21.1 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 echo "=== kubeadm init ==="
 kubeadm init \
   --control-plane-endpoint=${K8S_IP}:6443 \
@@ -479,6 +508,8 @@ REMOTE
 write_phase4() { cat > /tmp/byoc_p4.sh << REMOTE
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 set -e
 apt-get update -qq && apt-get install -y -qq postgresql-14
 systemctl enable postgresql && systemctl start postgresql
@@ -554,9 +585,15 @@ EOF
 echo "=== deploying cloudprem helm chart ==="
 helm upgrade --install ${NAMESPACE} datadog/cloudprem -f /tmp/ddvals.yaml -n ${NAMESPACE}
 echo "=== waiting for all pods Ready (up to 5 min) ==="
-kubectl wait --for=condition=Ready pod \
+if ! kubectl wait --for=condition=Ready pod \
   -l app.kubernetes.io/instance=${NAMESPACE} \
-  -n ${NAMESPACE} --timeout=300s 2>&1 | tail -3
+  -n ${NAMESPACE} --timeout=300s 2>&1; then
+  echo "=== pods not ready — describing pending pods ==="
+  kubectl get pods -n ${NAMESPACE}
+  kubectl describe pods -n ${NAMESPACE} \
+    --field-selector=status.phase=Pending 2>/dev/null | grep -A10 "Events:" | head -40
+  exit 1
+fi
 echo "=== pod status ==="
 kubectl get pods -n ${NAMESPACE}
 REMOTE
@@ -670,6 +707,15 @@ done
 # ── Step 0: Configuration ─────────────────────────────────────────────────────
 section "Configuration" "◎"
 
+# Load last-used instance IDs so pick_instance can highlight them
+LAST_K8S_INSTANCE="" LAST_PG_INSTANCE=""
+if [[ -f "$GLOBAL_LAST" ]]; then
+  source "$GLOBAL_LAST" 2>/dev/null || true
+  LAST_K8S_INSTANCE="${K8S_INSTANCE:-}"
+  LAST_PG_INSTANCE="${PG_INSTANCE:-}"
+  unset K8S_INSTANCE PG_INSTANCE 2>/dev/null || true
+fi
+
 ask "AWS profile"                             "byoc"          PROFILE
 ask "AWS region (e.g. us-east-1, us-west-1)"  "us-east-1"     REGION
 
@@ -679,38 +725,51 @@ echo ""
 
 info "Fetching available SSM instances..."
 pick_instance "Kubernetes node" K8S_INSTANCE
-pick_instance "PostgreSQL node" PG_INSTANCE
-
-ask "Datadog site"                            "datadoghq.com" DD_SITE
 echo ""
-echo -e "  ${DIM}The next two values determine your Datadog cluster identifier:${NC}"
-echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
-echo -e "  ${DIM}  e.g. byoclogs-byoclogs-cloudprem${NC}"
-echo -e "  ${DIM}  This is how the cluster appears in app.datadoghq.com/byoc-logs${NC}"
-echo ""
-ask "Cluster name in Datadog"                 "cloudprem"     CLUSTER_NAME
-ask "Kubernetes namespace"                    "byoclogs"      NAMESPACE
-ask "S3 bucket name"                          "byoclogs"      BUCKET
-ask "PostgreSQL database / user"              "byoclogs"      PG_USER
-ask "PostgreSQL password"                     "byoclogs"      PG_PASS
-ask_secret "Datadog API key"                                  DD_API_KEY
 
-echo ""
-info "Resolving instance IPs..."
-K8S_IP=$(get_private_ip "$K8S_INSTANCE") || abort "Could not resolve IP for $K8S_INSTANCE"
-[[ "$K8S_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-  || abort "IP lookup returned '${K8S_IP}' for ${K8S_INSTANCE} — check instance ID and region."
-PG_IP=$(get_private_ip "$PG_INSTANCE")   || abort "Could not resolve IP for $PG_INSTANCE"
-[[ "$PG_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-  || abort "IP lookup returned '${PG_IP}' for ${PG_INSTANCE} — check instance ID and region."
-
-# Re-key checkpoint dir to this specific K8S instance so runs against different
-# nodes don't share state, and re-running the same node resumes correctly.
+# Re-key checkpoint dir now that K8S_INSTANCE is known
 CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_${K8S_INSTANCE}"
 mkdir -p "$CKPT_DIR"
 
-S3_KEY=$(openssl rand -hex 10)
-S3_SECRET=$(openssl rand -hex 20)
+# ── Resume detection ──────────────────────────────────────────────────────────
+if [[ -f "$CKPT_DIR/config.env" ]]; then
+  echo ""
+  echo -e "  ${GREEN}${BOLD}  ↩  Saved config found for $K8S_INSTANCE${NC}"
+  echo -e "  ${DIM}  Loading previous session — skipping configuration questions.${NC}"
+  echo ""
+  source "$CKPT_DIR/config.env"
+  print_config
+  echo -e "  ${YELLOW}  Press Enter to resume, or Ctrl+C to start fresh (delete /tmp/.byoc_ckpt_${K8S_INSTANCE}).${NC}"
+  pause
+else
+  pick_instance "PostgreSQL node" PG_INSTANCE
+
+  ask "Datadog site"                            "datadoghq.com" DD_SITE
+  echo ""
+  echo -e "  ${DIM}The next two values determine your Datadog cluster identifier:${NC}"
+  echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
+  echo -e "  ${DIM}  e.g. byoclogs-byoclogs-cloudprem${NC}"
+  echo -e "  ${DIM}  This is how the cluster appears in app.datadoghq.com/byoc-logs${NC}"
+  echo ""
+  ask "Cluster name in Datadog"                 "cloudprem"     CLUSTER_NAME
+  ask "Kubernetes namespace"                    "byoclogs"      NAMESPACE
+  ask "S3 bucket name"                          "byoclogs"      BUCKET
+  ask "PostgreSQL database / user"              "byoclogs"      PG_USER
+  ask "PostgreSQL password"                     "byoclogs"      PG_PASS
+  ask_secret "Datadog API key"                                  DD_API_KEY
+
+  echo ""
+  info "Resolving instance IPs..."
+  K8S_IP=$(get_private_ip "$K8S_INSTANCE") || abort "Could not resolve IP for $K8S_INSTANCE"
+  [[ "$K8S_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || abort "IP lookup returned '${K8S_IP}' for ${K8S_INSTANCE} — check instance ID and region."
+  PG_IP=$(get_private_ip "$PG_INSTANCE")   || abort "Could not resolve IP for $PG_INSTANCE"
+  [[ "$PG_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || abort "IP lookup returned '${PG_IP}' for ${PG_INSTANCE} — check instance ID and region."
+
+  S3_KEY=$(openssl rand -hex 10)
+  S3_SECRET=$(openssl rand -hex 20)
+fi
 
 print_config
 arch_diagram "k8s"
@@ -718,6 +777,8 @@ arch_diagram "k8s"
 echo -e "  ${YELLOW}  This will take approximately 15–20 minutes total.${NC}"
 echo -e "  ${YELLOW}  PostgreSQL (Phase 4) runs in parallel with storage (Phase 3).${NC}"
 pause
+
+save_config
 
 # ── Phase 1: Kubernetes ───────────────────────────────────────────────────────
 section "Phase 1 — Kubernetes (kubeadm)" "①"
