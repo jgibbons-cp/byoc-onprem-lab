@@ -433,16 +433,25 @@ for i in \$(seq 1 24); do
   sleep 5
 done
 echo "=== removing control-plane taint ==="
-for i in \$(seq 1 10); do
-  kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null && break || true
+TAINT_REMOVED=false
+for i in \$(seq 1 20); do
+  if kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null; then
+    TAINT_REMOVED=true
+    break
+  fi
   sleep 5
 done
+if [[ "\$TAINT_REMOVED" == "false" ]]; then
+  echo "ERROR: failed to remove control-plane taint after 100s" >&2
+  exit 1
+fi
 kubectl get nodes
 REMOTE
 }
 
 write_phase2() { cat > /tmp/byoc_p2.sh << REMOTE
 #!/bin/bash
+set -e
 export KUBECONFIG=/root/.kube/config
 echo "=== adding cilium helm repo ==="
 helm repo add cilium https://helm.cilium.io/ --force-update 2>/dev/null || helm repo update
@@ -461,6 +470,7 @@ REMOTE
 
 write_phase3() { cat > /tmp/byoc_p3.sh << REMOTE
 #!/bin/bash
+set -e
 export KUBECONFIG=/root/.kube/config
 echo "=== local-path-provisioner ==="
 kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
