@@ -337,6 +337,10 @@ write_phase1() { cat > /tmp/byoc_p1.sh << REMOTE
 #!/bin/bash
 set -e
 export DEBIAN_FRONTEND=noninteractive
+echo "=== reset any existing cluster ==="
+kubeadm reset -f 2>/dev/null || true
+rm -rf /etc/kubernetes /root/.kube /var/lib/etcd /var/lib/kubelet /etc/cni /opt/cni 2>/dev/null || true
+apt-mark unhold kubelet kubeadm kubectl 2>/dev/null || true
 echo "=== containerd ==="
 apt-get update -qq
 apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
