@@ -370,6 +370,8 @@ mkdir -p /root/.kube
 cp /etc/kubernetes/admin.conf /root/.kube/config
 # Ensure kubeconfig always uses private IP regardless of what kubeadm wrote
 sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
+# Wait for node to register before removing taint
+kubectl wait node --for=condition=Ready=False --timeout=60s 2>/dev/null || true
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null || true
 kubectl get nodes
 REMOTE
