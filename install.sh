@@ -104,26 +104,38 @@ phase_done() {
 }
 
 pause() {
+  [[ "${BYOC_YES:-}" == "1" ]] && return
   echo -e "\n  ${YELLOW}  Press ${WHITE}[Enter]${YELLOW} to continue...${NC}"
-  read -r
+  read -r < /dev/tty
 }
 
 ask() {
   local prompt="$1" default="$2" varname="$3" resp
+  if [[ "${BYOC_YES:-}" == "1" ]]; then
+    printf -v "$varname" '%s' "$default"
+    printf "  ${WHITE}%-40s${NC}${DIM}[${default}]${NC}: ${DIM}%s (auto)${NC}\n" "$prompt" "$default"
+    return
+  fi
   if [[ -n "$default" ]]; then
     printf "  ${WHITE}%-40s${NC}${DIM}[${default}]${NC}: " "$prompt"
   else
     printf "  ${WHITE}%-40s${NC}: " "$prompt"
   fi
-  read -r resp
+  read -r resp < /dev/tty
   [[ -z "$resp" ]] && resp="$default"
   printf -v "$varname" '%s' "$resp"
 }
 
 ask_secret() {
   local prompt="$1" varname="$2" resp
+  if [[ "${BYOC_YES:-}" == "1" ]]; then
+    resp="${!varname:-}"
+    [[ -z "$resp" ]] && abort "$prompt must be set via env var when BYOC_YES=1 (e.g. export $varname=...)"
+    printf "  ${WHITE}%-40s${NC}: ${DIM}******* (env)${NC}\n" "$prompt"
+    return
+  fi
   printf "  ${WHITE}%-40s${NC}: " "$prompt"
-  stty -echo 2>/dev/null; read -r resp; stty echo 2>/dev/null
+  stty -echo 2>/dev/null; read -r resp < /dev/tty; stty echo 2>/dev/null
   echo ""
   printf -v "$varname" '%s' "$resp"
 }
@@ -283,6 +295,14 @@ pick_instance() {
   echo ""
 
   local choice
+  if [[ "${BYOC_YES:-}" == "1" ]]; then
+    local envvar="BYOC_${varname}"
+    local preset="${!envvar:-}"
+    [[ -z "$preset" ]] && abort "BYOC_YES=1 requires $envvar env var (instance ID for $role)"
+    printf -v "$varname" '%s' "$preset"
+    printf "  ${WHITE}%-40s${NC}: ${DIM}%s (env)${NC}\n" "Select $role instance" "$preset"
+    return
+  fi
   ask "Select $role instance number (or type instance ID directly)" "" choice
   if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#ids[@]}" ]]; then
     printf -v "$varname" '%s' "${ids[$((choice-1))]}"
