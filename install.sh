@@ -580,6 +580,13 @@ print_dashboard() {
   echo "  ╚══════════════════════════════════════════════════════════════════╝"
   echo -e "${NC}"
 
+  echo -e "  ${YELLOW}${BOLD}  Required: Enable the logs-cloudprem feature flag${NC}"
+  echo -e "  ${YELLOW}  The reverse connection will not activate until this is on.${NC}"
+  echo -e "  ${YELLOW}  Ask your Datadog contact (or Mosaic admin) to enable it at:${NC}"
+  echo -e "  ${CYAN}  https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem${NC}"
+  echo -e "  ${YELLOW}  Org: ${WHITE}${DD_SITE}${YELLOW}  API key prefix: ${WHITE}${DD_API_KEY:0:8}...${NC}"
+  echo ""
+
   echo -e "  ${WHITE}${BOLD}Verify in Datadog:${NC}"
   echo ""
   printf "  ${CYAN}1.${NC}  %-55s\n" "https://app.datadoghq.com/byoc-logs"
@@ -624,7 +631,7 @@ done
 section "Configuration" "◎"
 
 ask "AWS profile"                             "byoc"          PROFILE
-ask "AWS region"                              "us-west-1"     REGION
+ask "AWS region (e.g. us-east-1, us-west-1)"  "us-east-1"     REGION
 
 info "Validating credentials..."
 validate_creds
@@ -635,6 +642,12 @@ pick_instance "Kubernetes node" K8S_INSTANCE
 pick_instance "PostgreSQL node" PG_INSTANCE
 
 ask "Datadog site"                            "datadoghq.com" DD_SITE
+echo ""
+echo -e "  ${DIM}The next two values determine your Datadog cluster identifier:${NC}"
+echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
+echo -e "  ${DIM}  e.g. byoclogs-byoclogs-cloudprem${NC}"
+echo -e "  ${DIM}  This is how the cluster appears in app.datadoghq.com/byoc-logs${NC}"
+echo ""
 ask "Cluster name in Datadog"                 "cloudprem"     CLUSTER_NAME
 ask "Kubernetes namespace"                    "byoclogs"      NAMESPACE
 ask "S3 bucket name"                          "byoclogs"      BUCKET
@@ -664,7 +677,10 @@ containerd (CRI) → kubelet → kubeadm init → TLS PKI
 We use the PRIVATE IP for --control-plane-endpoint so the
 kubeconfig works from inside the instance via SSM without
 hairpin NAT. The control-plane taint is removed so pods
-can schedule on this single node."
+can schedule on this single node.
+
+Phase 1 is idempotent: it runs 'kubeadm reset -f' first,
+so re-running the installer on an existing node is safe."
 
 if ckpt_done "phase1"; then
   success "Phase 1 already completed — skipping."

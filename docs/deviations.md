@@ -44,6 +44,8 @@ kubectl patch storageclass local-path \
 
 local-path-provisioner creates PVCs as host directories on the node. No webhooks, no controllers. Used by default in k3s, kind, and minikube. On a single-node cluster, Longhorn's HA replication across nodes is meaningless anyway.
 
+**Why not just fix Longhorn?** The webhook deadlock is a known upstream bug reproduced on multiple versions. Patching the webhook to `failurePolicy: Ignore` doesn't work because Longhorn's reconciliation loop immediately reverts it. The fix would require either disabling the manager DaemonSet or running a pre-init job — both fragile. local-path-provisioner is the correct tool for a single-node lab; Longhorn is designed for multi-node HA.
+
 **Article update needed:** Note that Longhorn 1.7.x and 1.8.x are broken on k8s 1.26+. Recommend local-path-provisioner for single-node labs; Longhorn or Ceph for multi-node production.
 
 ---
