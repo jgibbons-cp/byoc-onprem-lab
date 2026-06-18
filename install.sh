@@ -690,8 +690,11 @@ print_dashboard() {
 
   echo -e "  ${WHITE}${BOLD}Verify in Datadog:${NC}"
   echo ""
+  local expected_name="${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}"
   printf "  ${CYAN}1.${NC}  %-55s\n" "https://${DD_SITE}/byoc-logs"
-  printf "      ${DIM}%-55s${NC}\n" "→ Your cluster should show: Connected  (Reverse)"
+  printf "      ${DIM}%-55s${NC}\n" "→ Look for cluster: ${expected_name}"
+  printf "      ${DIM}%-55s${NC}\n" "  (may show as ${expected_name}-XXXXXXXX if the name"
+  printf "      ${DIM}%-55s${NC}\n" "   already existed in your org — that is your cluster)"
   echo ""
   printf "  ${CYAN}2.${NC}  %-55s\n" "Hover cluster → Search Logs"
   printf "      ${DIM}%-55s${NC}\n" "→ Pod logs appear within ~2 minutes"
@@ -774,6 +777,9 @@ else
   echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
   echo -e "  ${DIM}  e.g. byoclogs-byoclogs-cloudprem${NC}"
   echo -e "  ${DIM}  This is how the cluster appears in app.datadoghq.com/byoc-logs${NC}"
+  echo -e "  ${YELLOW}  Tip: if a cluster with this name already exists in your org,${NC}"
+  echo -e "  ${YELLOW}  Datadog will append a random suffix (e.g. -680d109e). Use a${NC}"
+  echo -e "  ${YELLOW}  unique name per run to avoid this, or expect the suffix.${NC}"
   echo ""
   ask "Cluster name in Datadog"                 "cloudprem"     CLUSTER_NAME
   ask "Kubernetes namespace"                    "byoclogs"      NAMESPACE
