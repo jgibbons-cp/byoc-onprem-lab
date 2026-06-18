@@ -402,8 +402,11 @@ for i in \$(seq 1 24); do
   kubectl get nodes 2>/dev/null && break
   sleep 5
 done
-kubectl wait node --for=condition=Ready=False --timeout=60s 2>/dev/null || true
-kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null || true
+echo "=== removing control-plane taint ==="
+for i in \$(seq 1 10); do
+  kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null && break || true
+  sleep 5
+done
 kubectl get nodes
 REMOTE
 }
