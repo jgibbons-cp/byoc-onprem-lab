@@ -9,18 +9,19 @@ A single interactive script that teaches you what it deploys as it deploys it. B
 ## Quick Start
 
 ```bash
-git clone https://github.com/datadoghq-se/byoc-onprem-lab
+git clone https://github.com/rf00028/byoc-onprem-lab
 cd byoc-onprem-lab
+
+# Step 1: launch EC2 instances and wait for SSM registration (~3 min)
+bash launch_instances.sh
+
+# Step 2: install the full BYOC stack (~15-20 min)
 bash install.sh
 ```
 
-Or run directly:
+`launch_instances.sh` creates both EC2 nodes, sets up the IAM instance profile, and waits until they're reachable via SSM. `install.sh` then discovers them automatically — just pick them from the numbered list.
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/datadoghq-se/byoc-onprem-lab/main/install.sh)
-```
-
-The script discovers your SSM-registered instances automatically, asks ~10 questions, then runs end-to-end with live progress, parallel installs, and a checkpoint system that resumes from where it left off if interrupted.
+The script asks ~10 questions, then runs end-to-end with live progress, parallel installs, and a checkpoint system that resumes from where it left off if interrupted.
 
 ---
 
@@ -75,19 +76,38 @@ The script discovers your SSM-registered instances automatically, asks ~10 quest
 
 No `kubectl`, `helm`, or SSH needed locally. Everything runs remotely via AWS SSM SendCommand. The installer installs `helm`, `kubectl`, `kubeadm`, and `kubelet` on the remote Kubernetes node automatically.
 
-### AWS — launch before running the script
+### AWS — launch instances with the launcher script
 
-| Instance | Type | OS | Storage | Notes |
-|---|---|---|---|---|
-| Kubernetes node | `m5zn.metal` or `m5.4xlarge` | Ubuntu 22.04 | 300 GB gp3 | SSM agent + instance profile |
-| PostgreSQL node | `t3.micro` | Ubuntu 22.04 | 20 GB gp2 | SSM agent + port 5432 open to k8s SG |
+Use `launch_instances.sh` to create both EC2 instances in one step:
 
-Both instances need:
-- SSM Agent running
-- IAM instance profile with `AmazonSSMManagedInstanceCore`
-- Verify: `aws ssm describe-instance-information --region <region>` shows both as `Online`
+```bash
+bash launch_instances.sh
+```
 
-Your local AWS profile needs: `AmazonSSMFullAccess` + `AmazonEC2ReadOnlyAccess`
+The script:
+1. Finds the latest Ubuntu 22.04 LTS AMI for your region
+2. Creates (or reuses) a `byoc-cloudprem-lab` security group
+3. Creates (or reuses) an IAM instance profile with `AmazonSSMManagedInstanceCore`
+4. Launches the Kubernetes node (`m5.4xlarge`, 300 GB gp3)
+5. Launches the PostgreSQL node (`t3.micro`, 20 GB gp2)
+6. Waits until both appear `Online` in SSM, then prints the instance IDs
+
+Once it finishes, run `bash install.sh` and select the two instances it discovered.
+
+**Override defaults** with environment variables before running:
+```bash
+export BYOC_PROFILE=byoc          # AWS profile
+export BYOC_REGION=us-east-1      # AWS region
+export BYOC_K8S_TYPE=m5zn.metal   # use bare-metal if available in your account
+bash launch_instances.sh
+```
+
+| Instance | Default type | Storage | Notes |
+|---|---|---|---|
+| Kubernetes node | `m5.4xlarge` | 300 GB gp3 | Override with `BYOC_K8S_TYPE` |
+| PostgreSQL node | `t3.micro` | 20 GB gp2 | Override with `BYOC_PG_TYPE` |
+
+Your local AWS profile needs: `AmazonSSMFullAccess` + `AmazonEC2ReadOnlyAccess` + `IAMFullAccess` (for instance profile creation)
 
 ### Datadog
 - Org with `logs-cloudprem` feature flag enabled → [mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem](https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem)
