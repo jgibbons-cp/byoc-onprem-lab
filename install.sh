@@ -242,8 +242,8 @@ PY
       --query "Status" --output text 2>/dev/null) || status="InProgress"
     [[ "$status" != "InProgress" && "$status" != "Pending" ]] && break
     ((poll_count++)) || true
-    if [[ "$poll_count" -ge 300 ]]; then
-      echo "SSM_TIMEOUT: command $cmd_id still running after 15 minutes"
+    if [[ "$poll_count" -ge 600 ]]; then
+      echo "SSM_TIMEOUT: command $cmd_id still running after 30 minutes"
       return 1
     fi
     sleep 3
@@ -490,6 +490,8 @@ EOF
 kubectl create ns seaweedfs 2>/dev/null || true
 helm upgrade --install seaweedfs seaweedfs/seaweedfs -f /tmp/swfs.yaml -n seaweedfs
 kubectl rollout status statefulset/seaweedfs-master -n seaweedfs --timeout=300s
+kubectl rollout status statefulset/seaweedfs-filer  -n seaweedfs --timeout=300s
+kubectl rollout status statefulset/seaweedfs-volume -n seaweedfs --timeout=300s
 echo "=== bucket + user ==="
 kubectl exec -n seaweedfs seaweedfs-master-0 -- sh -c "
   echo 's3.bucket.create -name ${BUCKET}' | weed shell -master=localhost:9333
@@ -584,10 +586,10 @@ janitor:
 EOF
 echo "=== deploying cloudprem helm chart ==="
 helm upgrade --install ${NAMESPACE} datadog/cloudprem -f /tmp/ddvals.yaml -n ${NAMESPACE}
-echo "=== waiting for all pods Ready (up to 5 min) ==="
+echo "=== waiting for all pods Ready (up to 10 min) ==="
 if ! kubectl wait --for=condition=Ready pod \
   -l app.kubernetes.io/instance=${NAMESPACE} \
-  -n ${NAMESPACE} --timeout=300s 2>&1; then
+  -n ${NAMESPACE} --timeout=600s 2>&1; then
   echo "=== pods not ready — describing pending pods ==="
   kubectl get pods -n ${NAMESPACE}
   kubectl describe pods -n ${NAMESPACE} \
@@ -732,15 +734,15 @@ CKPT_DIR="${TMPDIR:-/tmp}/.byoc_ckpt_${K8S_INSTANCE}"
 mkdir -p "$CKPT_DIR"
 
 # ── Resume detection ──────────────────────────────────────────────────────────
+RESUMING=0
 if [[ -f "$CKPT_DIR/config.env" ]]; then
   echo ""
   echo -e "  ${GREEN}${BOLD}  ↩  Saved config found for $K8S_INSTANCE${NC}"
   echo -e "  ${DIM}  Loading previous session — skipping configuration questions.${NC}"
+  echo -e "  ${DIM}  To start fresh: rm -rf /tmp/.byoc_ckpt_${K8S_INSTANCE} then re-run.${NC}"
   echo ""
   source "$CKPT_DIR/config.env"
-  print_config
-  echo -e "  ${YELLOW}  Press Enter to resume, or Ctrl+C to start fresh (delete /tmp/.byoc_ckpt_${K8S_INSTANCE}).${NC}"
-  pause
+  RESUMING=1
 else
   pick_instance "PostgreSQL node" PG_INSTANCE
 
@@ -771,14 +773,17 @@ else
   S3_SECRET=$(openssl rand -hex 20)
 fi
 
+save_config
+
 print_config
 arch_diagram "k8s"
 
 echo -e "  ${YELLOW}  This will take approximately 15–20 minutes total.${NC}"
 echo -e "  ${YELLOW}  PostgreSQL (Phase 4) runs in parallel with storage (Phase 3).${NC}"
+if [[ "${RESUMING:-0}" == "1" ]]; then
+  echo -e "  ${YELLOW}  Resuming — completed phases will be skipped.${NC}"
+fi
 pause
-
-save_config
 
 # ── Phase 1: Kubernetes ───────────────────────────────────────────────────────
 section "Phase 1 — Kubernetes (kubeadm)" "①"
@@ -894,10 +899,13 @@ else
     rm -f "$PG_OUT" "${PG_OUT}.rc"
   fi
 
-  # Store metastore URI secret on k8s instance
+fi
+
+# Always ensure metastore URI secret is current before Phase 5 (idempotent)
+if ! ckpt_done "phase5"; then
+  write_phase4b
   spin_start "Creating metastore URI secret"
-  ssm_run "$K8S_INSTANCE" /tmp/byoc_p4b.sh > /dev/null
-  spin_stop "Metastore URI secret created"
+  ssm_run "$K8S_INSTANCE" /tmp/byoc_p4b.sh "Metastore URI secret created" > /dev/null
 fi
 
 echo ""
