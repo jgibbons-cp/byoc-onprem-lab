@@ -522,8 +522,10 @@ sudo -u postgres psql -c "ALTER DATABASE ${PG_USER} OWNER TO ${PG_USER};"
 PG_CONF=\$(find /etc/postgresql -name postgresql.conf | head -1)
 PG_HBA=\$(find /etc/postgresql -name pg_hba.conf | head -1)
 sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" "\$PG_CONF"
-grep -q "host.*${PG_USER}.*${PG_USER}.*10.0.0.0" "\$PG_HBA" || \
+grep -q "10.0.0.0" "\$PG_HBA" || \
   echo "host  ${PG_USER}  ${PG_USER}  10.0.0.0/8  md5" >> "\$PG_HBA"
+grep -q "172.16.0.0" "\$PG_HBA" || \
+  echo "host  ${PG_USER}  ${PG_USER}  172.16.0.0/12  md5" >> "\$PG_HBA"
 systemctl restart postgresql
 systemctl is-active postgresql
 echo "PostgreSQL ready at ${PG_IP}:5432"
@@ -545,9 +547,10 @@ REMOTE
 write_phase5() { cat > /tmp/byoc_p5.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
+DD_API_KEY_CLEAN=$(echo -n "${DD_API_KEY}" | tr -dc '0-9a-fA-F')
 kubectl delete secret datadog-secret -n ${NAMESPACE} 2>/dev/null || true
 kubectl create secret generic datadog-secret \
-  --from-literal api-key="${DD_API_KEY}" -n ${NAMESPACE}
+  --from-literal api-key="\$DD_API_KEY_CLEAN" -n ${NAMESPACE}
 helm repo add datadog https://helm.datadoghq.com --force-update 2>/dev/null || helm repo update
 cat > /tmp/ddvals.yaml << 'EOF'
 datadog:
