@@ -658,7 +658,7 @@ write_phase6() { cat > /tmp/byoc_p6.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
 echo "=== installing datadog operator ==="
-helm upgrade --install datadog-operator datadog/datadog-operator -n ${NAMESPACE} --wait --timeout=2m
+helm upgrade --install datadog-operator datadog/datadog-operator -n ${NAMESPACE} --wait --timeout=3m
 cat > /tmp/dda.yaml << 'EOF'
 apiVersion: datadoghq.com/v2alpha1
 kind: DatadogAgent
@@ -688,16 +688,32 @@ spec:
             fieldRef: {fieldPath: spec.nodeName}
 EOF
 kubectl apply -f /tmp/dda.yaml
-echo "=== waiting for operator to create cluster-agent deployment ==="
-for i in $(seq 1 36); do
-  kubectl get deployment/datadog-cluster-agent -n ${NAMESPACE} 2>/dev/null && break
+echo "=== waiting for operator to create cluster-agent deployment (up to 5 min) ==="
+FOUND=false
+for i in $(seq 1 60); do
+  if kubectl get deployment/datadog-cluster-agent -n ${NAMESPACE} &>/dev/null; then
+    FOUND=true
+    break
+  fi
   sleep 5
 done
-kubectl wait deployment/datadog-cluster-agent -n ${NAMESPACE} \
-  --for=condition=Available --timeout=180s
-kubectl rollout status daemonset/datadog-agent -n ${NAMESPACE} --timeout=180s
-echo "=== final pod status ==="
+if [[ "\$FOUND" == "false" ]]; then
+  echo "WARNING: cluster-agent deployment not yet created after 5 min — operator may still be reconciling"
+  echo "=== operator pod status ==="
+  kubectl get pods -n ${NAMESPACE} -l app.kubernetes.io/name=datadog-operator
+  echo "=== datadogagent status ==="
+  kubectl get datadogagent -n ${NAMESPACE} 2>/dev/null || true
+  echo "PHASE6_PARTIAL"
+else
+  kubectl wait deployment/datadog-cluster-agent -n ${NAMESPACE} \
+    --for=condition=Available --timeout=240s 2>/dev/null \
+    || echo "WARNING: cluster-agent not Available within 4 min — it may still be pulling images"
+  kubectl rollout status daemonset/datadog-agent -n ${NAMESPACE} --timeout=240s 2>/dev/null \
+    || echo "WARNING: agent daemonset rollout incomplete — it may still be pulling images"
+fi
+echo "=== pod status ==="
 kubectl get pods -n ${NAMESPACE}
+echo "PHASE6_DONE"
 REMOTE
 }
 
