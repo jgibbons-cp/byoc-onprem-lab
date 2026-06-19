@@ -408,46 +408,58 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
-echo "=== reset any existing cluster ==="
-kubeadm reset -f 2>/dev/null || true
-rm -rf /etc/kubernetes /root/.kube /var/lib/etcd /var/lib/kubelet /etc/cni /opt/cni 2>/dev/null || true
-apt-mark unhold kubelet kubeadm kubectl 2>/dev/null || true
-echo "=== containerd ==="
-apt-get update -qq
-apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
-mkdir -p /etc/containerd
-containerd config default > /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = true/SystemdCgroup = false/' /etc/containerd/config.toml
-systemctl restart containerd && systemctl enable containerd
-echo "=== kernel settings ==="
-modprobe br_netfilter overlay
-cat > /etc/sysctl.d/99-k8s.conf << 'EOF'
+
+# If kubeadm already initialized successfully, skip the full install.
+# This prevents the retry path from wiping a working cluster when only
+# the API server wait timed out on the first attempt.
+if [[ -f /etc/kubernetes/admin.conf ]] && \
+   kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes &>/dev/null; then
+  echo "=== kubeadm already initialized — skipping install, going to taint removal ==="
+  mkdir -p /root/.kube
+  cp /etc/kubernetes/admin.conf /root/.kube/config
+  sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
+else
+  echo "=== reset any existing cluster ==="
+  kubeadm reset -f 2>/dev/null || true
+  rm -rf /etc/kubernetes /root/.kube /var/lib/etcd /var/lib/kubelet /etc/cni /opt/cni 2>/dev/null || true
+  apt-mark unhold kubelet kubeadm kubectl 2>/dev/null || true
+  echo "=== containerd ==="
+  apt-get update -qq
+  apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+  mkdir -p /etc/containerd
+  containerd config default > /etc/containerd/config.toml
+  sed -i 's/SystemdCgroup = true/SystemdCgroup = false/' /etc/containerd/config.toml
+  systemctl restart containerd && systemctl enable containerd
+  echo "=== kernel settings ==="
+  modprobe br_netfilter overlay
+  cat > /etc/sysctl.d/99-k8s.conf << 'EOF'
 net.bridge.bridge-nf-call-iptables=1
 net.bridge.bridge-nf-call-ip6tables=1
 net.ipv4.ip_forward=1
 EOF
-sysctl --system -q
-swapoff -a && sed -i '/swap/d' /etc/fstab
-echo "=== kubeadm ==="
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key \
-  | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' \
-  > /etc/apt/sources.list.d/kubernetes.list
-apt-get update -qq
-apt-get install -y -qq kubelet kubeadm kubectl
-apt-mark hold kubelet kubeadm kubectl
-echo "=== helm ==="
-DESIRED_VERSION=v3.21.1 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-echo "=== kubeadm init ==="
-kubeadm init \
-  --control-plane-endpoint=${K8S_IP}:6443 \
-  --pod-network-cidr=10.0.0.0/16 \
-  --skip-phases=addon/kube-proxy \
-  --ignore-preflight-errors=NumCPU 2>&1 | tail -5
-mkdir -p /root/.kube
-cp /etc/kubernetes/admin.conf /root/.kube/config
-sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
+  sysctl --system -q
+  swapoff -a && sed -i '/swap/d' /etc/fstab
+  echo "=== kubeadm ==="
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key \
+    | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' \
+    > /etc/apt/sources.list.d/kubernetes.list
+  apt-get update -qq
+  apt-get install -y -qq kubelet kubeadm kubectl
+  apt-mark hold kubelet kubeadm kubectl
+  echo "=== helm ==="
+  DESIRED_VERSION=v3.21.1 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  echo "=== kubeadm init ==="
+  kubeadm init \
+    --control-plane-endpoint=${K8S_IP}:6443 \
+    --pod-network-cidr=10.0.0.0/16 \
+    --skip-phases=addon/kube-proxy \
+    --ignore-preflight-errors=NumCPU 2>&1 | tail -5
+  mkdir -p /root/.kube
+  cp /etc/kubernetes/admin.conf /root/.kube/config
+  sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
+fi
 echo "=== waiting for API server ==="
 API_READY=false
 for i in \$(seq 1 36); do
