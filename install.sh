@@ -8,10 +8,10 @@ IFS=$'\n\t'
 
 # ── Terminal & Colors ─────────────────────────────────────────────────────────
 TERM_WIDTH=$(tput cols 2>/dev/null || echo 80)
-RED='\033[0;31m';   GREEN='\033[0;32m';  YELLOW='\033[1;33m'
-BLUE='\033[0;34m';  CYAN='\033[0;36m';   WHITE='\033[1;37m'
-MAGENTA='\033[0;35m'; BOLD='\033[1m';    DIM='\033[2m';  NC='\033[0m'
-HIDE_CURSOR='\033[?25l'; SHOW_CURSOR='\033[?25h'
+RED=$'\033[0;31m';   GREEN=$'\033[0;32m';  YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m';  CYAN=$'\033[0;36m';   WHITE=$'\033[1;37m'
+MAGENTA=$'\033[0;35m'; BOLD=$'\033[1m';    DIM=$'\033[2m';  NC=$'\033[0m'
+HIDE_CURSOR=$'\033[?25l'; SHOW_CURSOR=$'\033[?25h'
 trap 'printf "${SHOW_CURSOR}"; stty echo 2>/dev/null; [[ -n "${SPINNER_PID:-}" ]] && kill "$SPINNER_PID" 2>/dev/null; exit' INT TERM EXIT
 
 # ── Checkpoint + Config Persistence ──────────────────────────────────────────
