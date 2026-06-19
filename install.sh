@@ -864,7 +864,7 @@ else
   ask "S3 bucket name"                          "byoclogs"      BUCKET
   ask "PostgreSQL database / user"              "byoclogs"      PG_USER
   ask "PostgreSQL password"                     "byoclogs"      PG_PASS
-  ask_secret "Datadog API key"                                  DD_API_KEY
+  ask_secret "Please supply your Datadog API key"               DD_API_KEY
   DD_API_KEY=$(echo -n "${DD_API_KEY}" | tr -dc '0-9a-fA-F')
   [[ ${#DD_API_KEY} -eq 32 ]] \
     || abort "Datadog API key must be exactly 32 hex characters (got ${#DD_API_KEY} after stripping non-hex chars). Check the key and try again."
