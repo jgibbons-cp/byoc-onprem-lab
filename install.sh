@@ -683,6 +683,44 @@ kubectl get pods -n ${NAMESPACE}
 REMOTE
 }
 
+write_phase7() { cat > /tmp/byoc_p7.sh << REMOTE
+#!/bin/bash
+export KUBECONFIG=/root/.kube/config
+echo "=== waiting for control-plane pod to be Running ==="
+CP_POD=""
+for i in \$(seq 1 30); do
+  CP_POD=\$(kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null \
+    | awk '/control.?plane.*Running/{print \$1}' | head -1)
+  [[ -n "\$CP_POD" ]] && break
+  sleep 5
+done
+if [[ -z "\$CP_POD" ]]; then
+  echo "ERROR: control-plane pod not Running after 150s"
+  kubectl get pods -n ${NAMESPACE}
+  exit 1
+fi
+echo "Found: \$CP_POD"
+echo "=== polling logs for reverse connection ==="
+CONNECTED=false
+for i in \$(seq 1 36); do
+  MATCH=\$(kubectl logs "\$CP_POD" -n ${NAMESPACE} --tail=100 2>/dev/null \
+    | grep -iE "connect|register|handshake|established|reverse|tunnel|grpc.*ok|ready" \
+    | grep -v "^#" | tail -5)
+  if [[ -n "\$MATCH" ]]; then
+    echo "CONNECTION_SEEN"
+    echo "\$MATCH"
+    CONNECTED=true
+    break
+  fi
+  sleep 5
+done
+if [[ "\$CONNECTED" == "false" ]]; then
+  echo "TIMEOUT: no connection log found after 3 minutes — showing last 30 lines:"
+  kubectl logs "\$CP_POD" -n ${NAMESPACE} --tail=30 2>/dev/null
+fi
+REMOTE
+}
+
 # ── Final Dashboard ───────────────────────────────────────────────────────────
 print_dashboard() {
   echo ""
@@ -1003,11 +1041,6 @@ else
   phase_done "CloudPrem" "$elapsed"
 fi
 
-echo ""
-info "At this point, open https://app.${DD_SITE}/byoc-logs"
-info "Your cluster should appear as Connected before we continue."
-pause
-
 # ── Phase 6: Datadog Operator + Agent ─────────────────────────────────────────
 section "Phase 6 — Datadog Operator + Agent" "⑥"
 arch_diagram "agent"
@@ -1035,9 +1068,41 @@ else
   phase_done "Datadog Operator + Agent" "$elapsed"
 fi
 
+# ── Phase 7: Verify Reverse Connection ───────────────────────────────────────
+section "Phase 7 — Verifying Reverse Connection" "⑦"
+explain "The CloudPrem control-plane opens an outbound reverse WebSocket
+to app.${DD_SITE}. Once established, your cluster appears in
+the BYOC Logs UI as Connected (Reverse). This phase watches
+the control-plane pod logs until the connection is confirmed
+(up to 3 minutes) so you know exactly when to check the UI.
+
+Expected cluster name: ${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}"
+
+write_phase7
+spin_start "Waiting for control-plane to connect to Datadog SaaS (~1-3 min)"
+p7_out=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p7.sh 2>&1) || true
+spin_stop
 echo ""
-echo -e "  ${GREEN}All components deployed. Review pod status above before continuing.${NC}"
-pause
+if echo "$p7_out" | grep -q "CONNECTION_SEEN"; then
+  success "Reverse connection established!"
+  echo ""
+  echo -e "  ${GREEN}${BOLD}Your cluster is now visible in the BYOC Logs UI:${NC}"
+  echo -e "  ${CYAN}  https://app.${DD_SITE}/byoc-logs${NC}"
+  echo -e "  ${WHITE}  Look for: ${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
+  echo -e "  ${DIM}  (may have a short suffix appended if the name already existed)${NC}"
+else
+  warn "Connection not confirmed in logs within 3 minutes."
+  echo -e "  ${YELLOW}  This is normal if the feature flag is not yet enabled.${NC}"
+  echo -e "  ${YELLOW}  Enable it at: ${CYAN}https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem${NC}"
+  echo -e "  ${YELLOW}  Then check: ${CYAN}https://app.${DD_SITE}/byoc-logs${NC}"
+  echo -e "  ${YELLOW}  Look for: ${WHITE}${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
+  echo ""
+  echo -e "  ${DIM}Control-plane log tail:${NC}"
+  echo "$p7_out" | tail -15 | while IFS= read -r line; do
+    echo -e "  ${DIM}${line}${NC}"
+  done
+fi
+echo ""
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 arch_diagram "done"
