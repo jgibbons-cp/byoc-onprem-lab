@@ -704,7 +704,7 @@ print_dashboard() {
   echo -e "  ${WHITE}${BOLD}Verify in Datadog:${NC}"
   echo ""
   local expected_name="${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}"
-  printf "  ${CYAN}1.${NC}  %-55s\n" "https://${DD_SITE}/byoc-logs"
+  printf "  ${CYAN}1.${NC}  %-55s\n" "https://app.${DD_SITE}/byoc-logs"
   printf "      ${DIM}%-55s${NC}\n" "→ Look for cluster: ${expected_name}"
   printf "      ${DIM}%-55s${NC}\n" "  (may show as ${expected_name}-XXXXXXXX if the name"
   printf "      ${DIM}%-55s${NC}\n" "   already existed in your org — that is your cluster)"
@@ -712,7 +712,7 @@ print_dashboard() {
   printf "  ${CYAN}2.${NC}  %-55s\n" "Hover cluster → Search Logs"
   printf "      ${DIM}%-55s${NC}\n" "→ Pod logs appear within ~2 minutes"
   echo ""
-  printf "  ${CYAN}3.${NC}  %-55s\n" "https://${DD_SITE}/metric/summary?filter=cloudprem"
+  printf "  ${CYAN}3.${NC}  %-55s\n" "https://app.${DD_SITE}/metric/summary?filter=cloudprem"
   printf "      ${DIM}%-55s${NC}\n" "→ QuickWit internal metrics via DogStatsD"
   echo ""
 
@@ -1004,7 +1004,7 @@ else
 fi
 
 echo ""
-info "At this point, open https://app.datadoghq.com/byoc-logs"
+info "At this point, open https://app.${DD_SITE}/byoc-logs"
 info "Your cluster should appear as Connected before we continue."
 pause
 
