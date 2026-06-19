@@ -147,9 +147,9 @@ ask() {
     return
   fi
   if [[ -n "$default" ]]; then
-    printf "  ${WHITE}%-40s${NC}${DIM}[${default}]${NC}: " "$prompt"
+    printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}${DIM}[${default}]${NC}: " "$prompt"
   else
-    printf "  ${WHITE}%-40s${NC}: " "$prompt"
+    printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}: " "$prompt"
   fi
   read -re resp < /dev/tty
   [[ -z "$resp" ]] && resp="$default"
@@ -168,9 +168,9 @@ ask_secret() {
   fi
   local existing="${!varname:-}"
   if [[ -n "$existing" ]]; then
-    printf "  ${WHITE}%-40s${NC}${DIM}[set - Enter to keep, or type new]${NC}: " "$prompt"
+    printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}${DIM}[set — Enter to keep]${NC}: " "$prompt"
   else
-    printf "  ${WHITE}%-40s${NC}${DIM}[required]${NC}: " "$prompt"
+    printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}${YELLOW}[required]${NC}: " "$prompt"
   fi
   stty -echo 2>/dev/null; read -re resp < /dev/tty; stty echo 2>/dev/null
   echo ""
