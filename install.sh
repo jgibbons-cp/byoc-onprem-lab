@@ -661,6 +661,9 @@ if ! kubectl wait --for=condition=Ready pod \
 fi
 echo "=== pod status ==="
 kubectl get pods -n ${NAMESPACE}
+echo "=== restarting searcher to pick up new datadog-secret ==="
+kubectl rollout restart statefulset/${NAMESPACE}-cloudprem-searcher -n ${NAMESPACE} 2>/dev/null || true
+kubectl rollout status statefulset/${NAMESPACE}-cloudprem-searcher -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
 REMOTE
 }
 
@@ -730,37 +733,47 @@ REMOTE
 write_phase7() { cat > /tmp/byoc_p7.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
-echo "=== waiting for control-plane pod to be Running ==="
-CP_POD=""
+# The reverse WebSocket is initiated by the SEARCHER pod, not the control-plane.
+# Success pattern: "fetched cluster remote uid" followed by "initiating new reverse connection"
+# with no "invalid authentication parameters" error within ~10s = connection live.
+echo "=== waiting for searcher pod to be Running ==="
+SEARCHER_POD=""
 for i in \$(seq 1 30); do
-  CP_POD=\$(kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null \
-    | awk '/control.?plane.*Running/{print \$1}' | head -1)
-  [[ -n "\$CP_POD" ]] && break
+  SEARCHER_POD=\$(kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null \
+    | awk '/searcher.*Running/{print \$1}' | head -1)
+  [[ -n "\$SEARCHER_POD" ]] && break
   sleep 5
 done
-if [[ -z "\$CP_POD" ]]; then
-  echo "ERROR: control-plane pod not Running after 150s"
+if [[ -z "\$SEARCHER_POD" ]]; then
+  echo "ERROR: searcher pod not Running after 150s"
   kubectl get pods -n ${NAMESPACE}
   exit 1
 fi
-echo "Found: \$CP_POD"
-echo "=== polling logs for reverse connection ==="
+echo "Found: \$SEARCHER_POD"
+echo "=== polling searcher logs for reverse connection ==="
 CONNECTED=false
 for i in \$(seq 1 36); do
-  MATCH=\$(kubectl logs "\$CP_POD" -n ${NAMESPACE} --tail=100 2>/dev/null \
-    | grep -iE "connect|register|handshake|established|reverse|tunnel|grpc.*ok|ready" \
-    | grep -v "^#" | tail -5)
-  if [[ -n "\$MATCH" ]]; then
+  LOGS=\$(kubectl logs "\$SEARCHER_POD" -n ${NAMESPACE} --tail=200 2>/dev/null)
+  UID_LINE=\$(echo "\$LOGS" | grep "fetched cluster remote uid" | tail -1)
+  INIT_LINE=\$(echo "\$LOGS" | grep "initiating new reverse connection" | tail -1)
+  AUTH_ERR=\$(echo "\$LOGS" | grep "invalid authentication parameters" | tail -1)
+  if [[ -n "\$UID_LINE" && -n "\$INIT_LINE" && -z "\$AUTH_ERR" ]]; then
     echo "CONNECTION_SEEN"
-    echo "\$MATCH"
+    echo "\$UID_LINE"
+    echo "\$INIT_LINE"
     CONNECTED=true
+    break
+  elif [[ -n "\$AUTH_ERR" ]]; then
+    echo "AUTH_ERROR: invalid authentication parameters — check API key"
+    echo "\$AUTH_ERR"
     break
   fi
   sleep 5
 done
 if [[ "\$CONNECTED" == "false" ]]; then
-  echo "TIMEOUT: no connection log found after 3 minutes — showing last 30 lines:"
-  kubectl logs "\$CP_POD" -n ${NAMESPACE} --tail=30 2>/dev/null
+  echo "TIMEOUT: no confirmed connection after 3 minutes — showing searcher websocket logs:"
+  kubectl logs "\$SEARCHER_POD" -n ${NAMESPACE} --tail=50 2>/dev/null \
+    | grep -i "websocket\|cloudprem::server\|reverse\|auth\|error"
 fi
 REMOTE
 }
@@ -1136,14 +1149,21 @@ if echo "$p7_out" | grep -q "CONNECTION_SEEN"; then
   echo -e "  ${CYAN}  https://app.${DD_SITE}/byoc-logs${NC}"
   echo -e "  ${WHITE}  Look for: ${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
   echo -e "  ${DIM}  (may have a short suffix appended if the name already existed)${NC}"
+elif echo "$p7_out" | grep -q "AUTH_ERROR"; then
+  warn "Reverse connection auth failed — API key rejected by Datadog."
+  echo -e "  ${RED}  The searcher could not authenticate. Check the API key is valid for this org:${NC}"
+  echo -e "  ${CYAN}  https://app.${DD_SITE}/organization-settings/api-keys${NC}"
+  echo ""
+  echo "$p7_out" | grep -i "auth_error\|authentication" | while IFS= read -r line; do
+    echo -e "  ${DIM}${line}${NC}"
+  done
 else
   warn "Connection not confirmed in logs within 3 minutes."
-  echo -e "  ${YELLOW}  This is normal if the feature flag is not yet enabled.${NC}"
-  echo -e "  ${YELLOW}  Enable it at: ${CYAN}https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem${NC}"
-  echo -e "  ${YELLOW}  Then check: ${CYAN}https://app.${DD_SITE}/byoc-logs${NC}"
+  echo -e "  ${YELLOW}  The searcher did not log a confirmed reverse connection.${NC}"
+  echo -e "  ${YELLOW}  Check: ${CYAN}https://app.${DD_SITE}/byoc-logs${NC}"
   echo -e "  ${YELLOW}  Look for: ${WHITE}${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
   echo ""
-  echo -e "  ${DIM}Control-plane log tail:${NC}"
+  echo -e "  ${DIM}Searcher websocket log tail:${NC}"
   echo "$p7_out" | tail -15 | while IFS= read -r line; do
     echo -e "  ${DIM}${line}${NC}"
   done
