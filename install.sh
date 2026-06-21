@@ -269,19 +269,19 @@ ssm_run() {
   local instance="$1" script_file="$2" label="${3:-}"
   local t0=$SECONDS output
   output=$(_ssm_send "$instance" "$script_file") || {
-    spin_stop
+    spin_stop >&2
     local logfile="${CKPT_DIR}/error_$(basename "$script_file" .sh)_$(date +%H%M%S).log"
     echo "$output" > "$logfile"
-    echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n"
-    echo -e "${DIM}  Last output:${NC}"
+    echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n" >&2
+    echo -e "${DIM}  Last output:${NC}" >&2
     echo "$output" | tail -20 | while IFS= read -r line; do
-      echo -e "  ${DIM}${line}${NC}"
+      echo -e "  ${DIM}${line}${NC}" >&2
     done
-    echo -e "\n  ${DIM}Full log saved to: ${logfile}${NC}\n"
-    printf "${SHOW_CURSOR}"
+    echo -e "\n  ${DIM}Full log saved to: ${logfile}${NC}\n" >&2
+    printf "${SHOW_CURSOR}" >&2
     exit 1
   }
-  spin_stop "${label}"
+  spin_stop "${label}" >&2
   echo $((SECONDS - t0))
 }
 
@@ -591,7 +591,22 @@ REMOTE
 write_phase5() { cat > /tmp/byoc_p5.sh << REMOTE
 #!/bin/bash
 export KUBECONFIG=/root/.kube/config
-DD_API_KEY_CLEAN=$(echo -n "${DD_API_KEY}" | tr -dc '0-9a-fA-F')
+DD_API_KEY_CLEAN="${DD_API_KEY}"
+if [[ ! "\$DD_API_KEY_CLEAN" =~ ^[0-9a-fA-F]{32}\$ ]]; then
+  echo "ERROR: DD_API_KEY does not look like a valid 32-char hex Datadog API key" >&2
+  echo "ERROR: Got: '\$DD_API_KEY_CLEAN' (len=\${#DD_API_KEY_CLEAN})" >&2
+  exit 1
+fi
+echo "=== validating API key against Datadog ==="
+HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "DD-API-KEY: \$DD_API_KEY_CLEAN" \
+  "https://api.datadoghq.com/api/v1/validate")
+if [[ "\$HTTP_CODE" != "200" ]]; then
+  echo "ERROR: Datadog API key validation failed (HTTP \$HTTP_CODE)" >&2
+  echo "ERROR: Check your key at https://app.datadoghq.com/organization-settings/api-keys" >&2
+  exit 1
+fi
+echo "=== API key valid (HTTP 200) ==="
 kubectl delete secret datadog-secret -n ${NAMESPACE} 2>/dev/null || true
 kubectl create secret generic datadog-secret \
   --from-literal api-key="\$DD_API_KEY_CLEAN" -n ${NAMESPACE}
@@ -600,6 +615,7 @@ cat > /tmp/ddvals.yaml << 'EOF'
 datadog:
   site: ${DD_SITE}
   apiKeyExistingSecret: datadog-secret
+  clusterName: ${CLUSTER_NAME}
 serviceAccount:
   create: true
   name: ${NAMESPACE}
@@ -921,7 +937,7 @@ if ckpt_done "phase1"; then
 else
   write_phase1
   spin_start "Bootstrapping Kubernetes"
-  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p1.sh)
+  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p1.sh) || exit 1
   ckpt_set "phase1"
   phase_done "Kubernetes bootstrap" "$elapsed"
 fi
@@ -945,7 +961,7 @@ if ckpt_done "phase2"; then
 else
   write_phase2
   spin_start "Installing Cilium and waiting for node Ready"
-  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p2.sh)
+  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p2.sh) || exit 1
   ckpt_set "phase2"
   phase_done "Cilium CNI" "$elapsed"
 fi
@@ -993,7 +1009,7 @@ else
   # Storage in foreground
   if ! ckpt_done "phase3"; then
     spin_start "Installing local-path-provisioner + SeaweedFS"
-    STORAGE_ELAPSED=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p3.sh)
+    STORAGE_ELAPSED=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p3.sh) || exit 1
     ckpt_set "phase3"
     phase_done "Storage (local-path + SeaweedFS)" "$STORAGE_ELAPSED"
   fi
@@ -1063,10 +1079,10 @@ else
   # and will leave all pods Pending indefinitely on a single-node cluster.
   write_taint_guard
   spin_start "Checking control-plane taint"
-  ssm_run "$K8S_INSTANCE" /tmp/byoc_taint.sh "TAINT_OK" > /dev/null
+  ssm_run "$K8S_INSTANCE" /tmp/byoc_taint.sh "TAINT_OK" > /dev/null || exit 1
   write_phase5
   spin_start "Deploying CloudPrem (this takes ~3 minutes)"
-  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p5.sh)
+  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p5.sh) || exit 1
   ckpt_set "phase5"
   phase_done "CloudPrem" "$elapsed"
 fi
@@ -1093,7 +1109,7 @@ if ckpt_done "phase6"; then
 else
   write_phase6
   spin_start "Deploying Datadog Operator and Agent"
-  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p6.sh)
+  elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p6.sh) || exit 1
   ckpt_set "phase6"
   phase_done "Datadog Operator + Agent" "$elapsed"
 fi
