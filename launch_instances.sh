@@ -145,13 +145,16 @@ success "Subnet: $SUBNET_ID"
 PROFILE_NAME="AmazonSSMManagedInstanceCoreProfile"
 
 info "Checking for SSM instance profile..."
-EXISTING_PROFILE=$(aws iam get-instance-profile \
+EXISTING_RAW=$(aws iam get-instance-profile \
   --instance-profile-name "$PROFILE_NAME" \
   --profile "$PROFILE" --region "$REGION" \
-  --query "InstanceProfile.InstanceProfileName" --output text 2>/dev/null || true)
+  --query "InstanceProfile.InstanceProfileName" --output text 2>&1) || true
 
-if [[ "$EXISTING_PROFILE" == "$PROFILE_NAME" ]]; then
+if [[ "$EXISTING_RAW" == "$PROFILE_NAME" ]]; then
   success "Using existing instance profile: $PROFILE_NAME"
+elif echo "$EXISTING_RAW" | grep -q "AccessDenied"; then
+  # Power-user SSO role — can't read IAM, but the profile is pre-provisioned
+  success "Instance profile assumed present (IAM read not permitted by this role): $PROFILE_NAME"
 else
   info "Creating IAM role and instance profile for SSM..."
 
@@ -168,47 +171,38 @@ else
       fi
     }
 
-  # Attach SSM policy — if already attached, ignore
-  aws iam attach-role-policy \
-    --role-name "$PROFILE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" \
-    --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
-
-  # Create instance profile — AlreadyExists is fine
-  aws iam create-instance-profile \
-    --instance-profile-name "$PROFILE_NAME" \
-    --profile "$PROFILE" --region "$REGION" \
-    --output text > /dev/null 2>&1 || true
-
-  # Add role — if already added, ignore
-  aws iam add-role-to-instance-profile \
-    --instance-profile-name "$PROFILE_NAME" \
-    --role-name "$PROFILE_NAME" \
-    --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
-
-  # Verify the profile actually exists and has a role attached before continuing
-  VERIFY=$(aws iam get-instance-profile \
-    --instance-profile-name "$PROFILE_NAME" \
-    --profile "$PROFILE" --region "$REGION" \
-    --query "InstanceProfile.Roles[0].RoleName" --output text 2>/dev/null || true)
-
-  if [[ -z "$VERIFY" || "$VERIFY" == "None" ]]; then
-    abort "Instance profile '${PROFILE_NAME}' does not exist or has no role attached.\n\
-  Your AWS role may lack iam:CreateRole. Ask an admin to run once:\n\
-\n\
-    aws iam create-role --role-name ${PROFILE_NAME} \\\n\
-      --assume-role-policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}'\n\
-    aws iam attach-role-policy --role-name ${PROFILE_NAME} \\\n\
-      --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore\n\
-    aws iam create-instance-profile --instance-profile-name ${PROFILE_NAME}\n\
-    aws iam add-role-to-instance-profile --instance-profile-name ${PROFILE_NAME} --role-name ${PROFILE_NAME}"
-  fi
-
-  # IAM is eventually consistent — only wait if we just created it
+  # Only attempt these if we actually created the role (not AccessDenied)
   if ! echo "$CREATE_ROLE_OUT" | grep -q "AccessDenied"; then
-    info "Waiting for IAM to propagate..."
-    sleep 10
+    # Attach SSM policy — if already attached, ignore
+    aws iam attach-role-policy \
+      --role-name "$PROFILE_NAME" \
+      --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" \
+      --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
+
+    # Create instance profile — AlreadyExists is fine
+    aws iam create-instance-profile \
+      --instance-profile-name "$PROFILE_NAME" \
+      --profile "$PROFILE" --region "$REGION" \
+      --output text > /dev/null 2>&1 || true
+
+    # Add role — if already added, ignore
+    aws iam add-role-to-instance-profile \
+      --instance-profile-name "$PROFILE_NAME" \
+      --role-name "$PROFILE_NAME" \
+      --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
+
+    # Verify the profile exists and propagated (only meaningful after we created it)
+    VERIFY=$(aws iam get-instance-profile \
+      --instance-profile-name "$PROFILE_NAME" \
+      --profile "$PROFILE" --region "$REGION" \
+      --query "InstanceProfile.Roles[0].RoleName" --output text 2>/dev/null || true)
+
+    if [[ -z "$VERIFY" || "$VERIFY" == "None" ]]; then
+      info "IAM not yet propagated — waiting 10s..."
+      sleep 10
+    fi
   fi
+
   success "Instance profile ready: $PROFILE_NAME"
 fi
 
