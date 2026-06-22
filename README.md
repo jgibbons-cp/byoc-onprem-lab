@@ -76,15 +76,15 @@ The script asks ~8 questions, press **Enter once** to confirm, then runs fully a
        +-------------------------------------+
 ```
 
-| Component | What it is | Why this one |
-|---|---|---|
-| **Kubernetes** (kubeadm v1.32) | Single-node bare-metal cluster | No cloud provider needed — runs identically to EKS/GKE |
-| **Cilium** CNI | eBPF-based pod networking | High-performance; required bare-metal bootstrap flags documented |
-| **local-path-provisioner** | Dynamic PVC provisioning | Replaces Longhorn — deadlock bug on k8s 1.32+, see [docs/deviations.md](docs/deviations.md) |
-| **SeaweedFS** | S3-compatible object store | Replaces MinIO — open-source repo was archived in 2024 |
-| **PostgreSQL 14** | QuickWit split metadata store | Mirrors real-world BYOC deployments with RDS |
-| **CloudPrem** (helm) | Indexer · searcher · metastore · control-plane · janitor | The actual product |
-| **Datadog Operator + Agent** | Manages agent lifecycle via CRD | Log collection → CloudPrem indexer (never touches SaaS) |
+| Component | What it is | Role in CloudPrem | Why this one |
+|---|---|---|---|
+| **Kubernetes** (kubeadm v1.32) | Single-node bare-metal cluster bootstrapped with `kubeadm init` on Ubuntu 22.04 | Runs all CloudPrem pods and the Datadog Agent on a single schedulable node | No cloud provider dependency — behavior is identical to EKS/GKE; containerd CRI; control-plane taint removed so workloads schedule |
+| **Cilium** CNI | eBPF-based Container Network Interface plugin | Provides pod-to-pod networking, DNS, and kube-proxy replacement | On bare metal the cluster service IP is unreachable during bootstrap — Cilium requires `--set k8sServiceHost/Port` flags; documented in [deviations #4](docs/deviations.md) |
+| **local-path-provisioner** | Lightweight dynamic PVC provisioner — creates volumes as host directories on the node | Satisfies PersistentVolumeClaims for the indexer (50 Gi scratch) and SeaweedFS volumes | Replaces Longhorn, which has a webhook deadlock on k8s 1.32+ that cannot be patched without disabling the manager; see [deviations #2](docs/deviations.md) |
+| **SeaweedFS** | Self-hosted S3-compatible object store (POSIX + S3 API on port 8333) | Stores the indexed log data as Parquet "split" files at `s3://byoclogs/indexes` — stands in for customer-managed S3, Azure Blob, Ceph, or NetApp | Replaces MinIO whose open-source AGPL repo was archived in 2024; AWS SDK v2 requires an explicit `region` field even for custom endpoints — see [deviations #10](docs/deviations.md) |
+| **PostgreSQL 14** | Relational database on a separate `t3.micro` EC2 instance | Stores QuickWit's split catalog — metadata about every indexed log segment (file path, time range, tags, merge history); required for search to work | Mirrors real-world BYOC deployments where customers bring RDS or Cloud SQL; runs on a separate node to reflect realistic network topology |
+| **CloudPrem** (helm chart) | Five microservices deployed via the `datadog/cloudprem` Helm chart | **indexer** writes incoming logs to SeaweedFS; **searcher** executes queries from SaaS over the reverse WebSocket; **metastore** manages the split catalog in PostgreSQL; **control-plane** holds the outbound WebSocket to `app.datadoghq.com`; **janitor** enforces retention | The actual product being demoed — all traffic flows locally except the control-plane's outbound connection to SaaS |
+| **Datadog Operator + Agent** | Kubernetes Operator managing a `DatadogAgent` CRD; node agent runs as a DaemonSet | Collects all container logs from the CRI socket and ships them to `indexer:7280` — never to SaaS intake | Demonstrates the full on-prem log collection path; `DD_LOGS_CONFIG_LOGS_DD_URL` overrides the default SaaS endpoint to point at the local indexer |
 
 ---
 
