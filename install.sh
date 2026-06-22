@@ -1524,6 +1524,12 @@ if [[ -f "$CKPT_DIR/config.env" ]]; then
   echo ""
   source "$CKPT_DIR/config.env"
   RESUMING=1
+
+  info "Verifying instances are still reachable via SSM..."
+  validate_instance "$K8S_INSTANCE" "Kubernetes"
+  validate_instance "$PG_INSTANCE"  "PostgreSQL"
+  success "Both instances reachable."
+  echo ""
 else
   pick_instance "PostgreSQL node" PG_INSTANCE postgres
   [[ "$K8S_INSTANCE" == "$PG_INSTANCE" ]] && \
@@ -1878,7 +1884,8 @@ Hang tight — this is the finish line! 🏁"
 
 write_phase7
 spin_start "Waiting for control-plane to connect to Datadog SaaS (~1-3 min)  ${DIM}[${K8S_INSTANCE}]${NC}"
-p7_out=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p7.sh 2>&1) || true
+p7_exit=0
+p7_out=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p7.sh 2>&1) || p7_exit=$?
 spin_stop
 echo ""
 if echo "$p7_out" | grep -q "CONNECTION_SEEN"; then
@@ -1896,13 +1903,22 @@ elif echo "$p7_out" | grep -q "AUTH_ERROR"; then
   echo "$p7_out" | grep -i "auth_error\|authentication" | while IFS= read -r line; do
     echo -e "  ${DIM}${line}${NC}"
   done
+elif [[ $p7_exit -ne 0 ]] && echo "$p7_out" | grep -qi "not reachable via SSM\|InvalidInstanceId\|TargetNotConnected"; then
+  warn "Phase 7 skipped — SSM connection to ${K8S_INSTANCE} was lost."
+  echo -e "  ${YELLOW}  The instance may have restarted or the SSM agent dropped.${NC}"
+  echo -e "  ${YELLOW}  Re-run install.sh — phases 1–6 are checkpointed and will be skipped.${NC}"
+  echo -e "  ${YELLOW}  Phase 7 only tails logs and does not modify cluster state.${NC}"
 else
   warn "Connection not confirmed in logs within 3 minutes."
-  echo -e "  ${YELLOW}  The searcher did not log a confirmed reverse connection.${NC}"
-  echo -e "  ${YELLOW}  Check: ${CYAN}https://app.${DD_SITE}/byoc-logs${NC}"
-  echo -e "  ${YELLOW}  Look for: ${WHITE}${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
+  echo -e "  ${YELLOW}  Most likely cause: 'logs-cloudprem' feature flag is not enabled.${NC}"
+  echo -e "  ${YELLOW}  Enable it at: ${CYAN}https://mosaic.us1.ddbuild.io/feature-flags/logs-cloudprem${NC}"
+  echo -e "  ${YELLOW}  Then restart the control plane:${NC}"
+  echo -e "  ${DIM}    KUBECONFIG=/etc/kubernetes/admin.conf kubectl rollout restart deployment/${NAMESPACE}-cloudprem-control-plane -n ${NAMESPACE}${NC}"
   echo ""
-  echo -e "  ${DIM}Searcher websocket log tail:${NC}"
+  echo -e "  ${DIM}  Check: ${CYAN}https://app.${DD_SITE}/byoc-logs${NC}"
+  echo -e "  ${DIM}  Look for: ${WHITE}${NAMESPACE}-${NAMESPACE}-${CLUSTER_NAME}${NC}"
+  echo ""
+  echo -e "  ${DIM}Control-plane log tail:${NC}"
   echo "$p7_out" | tail -15 | while IFS= read -r line; do
     echo -e "  ${DIM}${line}${NC}"
   done
