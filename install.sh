@@ -302,12 +302,14 @@ ssm_run() {
     local logfile="${CKPT_DIR}/error_$(basename "$script_file" .sh)_$(date +%H%M%S).log"
     echo "$output" > "$logfile"
     if echo "$output" | grep -qi "InvalidInstanceId\|not.*registered\|TargetNotConnected"; then
-      echo -e "\n  ${RED}${BOLD} ✗  Instance not reachable via SSM${NC}\n" >&2
+      echo -e "\n  ${RED}${BOLD} ✗  Instance not reachable via SSM${NC}" >&2
+      echo -e "  ${DIM}  Instance: ${instance}${NC}" >&2
       echo -e "  ${YELLOW}The instance is not registered with SSM yet (can take 3-5 min after launch).${NC}" >&2
       echo -e "  Re-run in a minute — the checkpoint system will skip completed phases.\n" >&2
     else
-      echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n" >&2
-      echo -e "${DIM}  Last output:${NC}" >&2
+      echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}" >&2
+      echo -e "  ${DIM}  Instance: ${instance}  Script: $(basename "$script_file")${NC}" >&2
+      echo -e "\n${DIM}  Last output:${NC}" >&2
       echo "$output" | tail -20 | while IFS= read -r line; do
         echo -e "  ${DIM}${line}${NC}" >&2
       done
@@ -1606,7 +1608,7 @@ if ckpt_done "phase1"; then
 else
   validate_creds
   write_phase1
-  spin_start "Bootstrapping Kubernetes"
+  spin_start "Bootstrapping Kubernetes  ${DIM}[${K8S_INSTANCE}]${NC}"
   elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p1.sh) || exit 1
   ckpt_set "phase1"
   phase_done "Kubernetes bootstrap" "$elapsed"
@@ -1645,7 +1647,7 @@ if ckpt_done "phase2"; then
   success "Phase 2 already completed — skipping."
 else
   write_phase2
-  spin_start "Installing Cilium and waiting for node Ready"
+  spin_start "Installing Cilium and waiting for node Ready  ${DIM}[${K8S_INSTANCE}]${NC}"
   elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p2.sh) || exit 1
   ckpt_set "phase2"
   phase_done "Cilium CNI" "$elapsed"
@@ -1703,7 +1705,7 @@ else
 
   # Storage in foreground
   if ! ckpt_done "phase3"; then
-    spin_start "Installing local-path-provisioner + SeaweedFS"
+    spin_start "Installing local-path-provisioner + SeaweedFS  ${DIM}[${K8S_INSTANCE}]${NC}"
     STORAGE_ELAPSED=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p3.sh) || {
       [[ -n "${PG_PID:-}" ]] && kill "$PG_PID" 2>/dev/null; exit 1
     }
@@ -1713,7 +1715,7 @@ else
 
   # Wait for PostgreSQL background job
   if [[ -n "$PG_PID" ]]; then
-    spin_start "Waiting for PostgreSQL"
+    spin_start "Installing PostgreSQL  ${DIM}[${PG_INSTANCE}]${NC}"
     local_t0=$SECONDS
     wait "$PG_PID" || true
     spin_stop
@@ -1746,7 +1748,7 @@ fi
 # Always ensure metastore URI secret is current before Phase 5 (idempotent)
 if ! ckpt_done "phase5"; then
   write_phase4b
-  spin_start "Ensuring k8s secrets are current"
+  spin_start "Ensuring k8s secrets are current  ${DIM}[${K8S_INSTANCE}]${NC}"
   ssm_run "$K8S_INSTANCE" /tmp/byoc_p4b.sh "Secrets created" > /dev/null
 fi
 
@@ -1798,10 +1800,10 @@ else
   # Remove the control-plane taint — it can persist across checkpoint boundaries
   # and will leave all pods Pending indefinitely on a single-node cluster.
   write_taint_guard
-  spin_start "Checking control-plane taint"
+  spin_start "Checking control-plane taint  ${DIM}[${K8S_INSTANCE}]${NC}"
   ssm_run "$K8S_INSTANCE" /tmp/byoc_taint.sh "TAINT_OK" > /dev/null || exit 1
   write_phase5
-  spin_start "Deploying CloudPrem (this takes ~3 minutes)"
+  spin_start "Deploying CloudPrem (this takes ~3 minutes)  ${DIM}[${K8S_INSTANCE}]${NC}"
   elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p5.sh) || exit 1
   ckpt_set "phase5"
   phase_done "CloudPrem" "$elapsed"
@@ -1840,7 +1842,7 @@ if ckpt_done "phase6"; then
   success "Phase 6 already completed — skipping."
 else
   write_phase6
-  spin_start "Deploying Datadog Operator and Agent"
+  spin_start "Deploying Datadog Operator and Agent  ${DIM}[${K8S_INSTANCE}]${NC}"
   elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p6.sh) || exit 1
   ckpt_set "phase6"
   phase_done "Datadog Operator + Agent" "$elapsed"
@@ -1874,7 +1876,7 @@ on your Datadog org or the WebSocket will be rejected. If Phase
 Hang tight — this is the finish line! 🏁"
 
 write_phase7
-spin_start "Waiting for control-plane to connect to Datadog SaaS (~1-3 min)"
+spin_start "Waiting for control-plane to connect to Datadog SaaS (~1-3 min)  ${DIM}[${K8S_INSTANCE}]${NC}"
 p7_out=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p7.sh 2>&1) || true
 spin_stop
 echo ""
