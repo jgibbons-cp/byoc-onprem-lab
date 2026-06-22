@@ -339,16 +339,32 @@ validate_creds() {
   echo ""
   echo -e "  ${RED}${BOLD} ✗  AWS SSO session expired${NC}"
   echo ""
-  if [[ -n "$sso_url" ]]; then
-    echo -e "  ${YELLOW}Your SSO portal (open this if the browser doesn't launch automatically):${NC}"
-    echo -e "  ${CYAN}${BOLD}  ${sso_url}${NC}"
+
+  # Profile not configured for SSO yet — must run configure first
+  if [[ -z "$sso_url" ]]; then
+    echo -e "  ${YELLOW}The '${PROFILE}' profile is not configured for SSO.${NC}"
+    echo -e "  ${YELLOW}Run this to set it up, then re-run the installer:${NC}"
     echo ""
+    echo -e "  ${CYAN}${BOLD}  aws configure sso --profile ${PROFILE}${NC}"
+    echo ""
+    abort "SSO not configured for profile '${PROFILE}'. Run: aws configure sso --profile ${PROFILE}"
   fi
-  echo -e "  ${YELLOW}Opening SSO login — approve the request in your browser, then return here.${NC}"
-  echo -e "  ${DIM}  (aws sso login --profile ${PROFILE})${NC}"
+
+  echo -e "  ${YELLOW}Your SSO portal (open this if the browser doesn't launch automatically):${NC}"
+  echo -e "  ${CYAN}${BOLD}  ${sso_url}${NC}"
   echo ""
-  aws sso login --profile "$PROFILE" \
-    || abort "SSO login failed. Open ${sso_url:-your SSO portal} and re-run: aws sso login --profile ${PROFILE}"
+  echo -e "  ${YELLOW}Logging in — approve the request in your browser, then return here.${NC}"
+  echo -e "  ${CYAN}  aws sso login --profile ${PROFILE}${NC}"
+  echo ""
+  local login_err
+  login_err=$(aws sso login --profile "$PROFILE" 2>&1) || {
+    echo -e "  ${RED}SSO login failed:${NC} ${login_err}" >&2
+    echo ""
+    echo -e "  ${YELLOW}If the profile is misconfigured, re-run setup with:${NC}"
+    echo -e "  ${CYAN}${BOLD}  aws configure sso --profile ${PROFILE}${NC}"
+    echo ""
+    abort "SSO login failed for profile '${PROFILE}'"
+  }
   echo ""
   aws sts get-caller-identity --profile "$PROFILE" --region "$REGION" > /dev/null 2>&1 \
     || abort "Still not authenticated after login. Run: aws sso login --profile ${PROFILE}"
