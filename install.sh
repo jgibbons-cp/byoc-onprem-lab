@@ -476,6 +476,10 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
+
+# surface the exact line and command on any unexpected exit
+trap 'echo ""; echo "ERROR: phase1 failed at line \$LINENO — command: \$BASH_COMMAND" >&2; exit 1' ERR
+
 echo "=== check existing cluster health ==="
 if KUBECONFIG=/root/.kube/config kubectl get nodes 2>/dev/null | grep -q " Ready"; then
   echo "Cluster already initialized and node is Ready — skipping reset and init"
@@ -486,6 +490,18 @@ echo "=== reset any existing cluster ==="
 kubeadm reset -f 2>/dev/null || true
 rm -rf /etc/kubernetes /root/.kube /var/lib/etcd /var/lib/kubelet /etc/cni /opt/cni 2>/dev/null || true
 apt-mark unhold kubelet kubeadm kubectl 2>/dev/null || true
+
+echo "=== killing any lingering kube/etcd processes ==="
+pkill -9 -f 'kube-apiserver|kube-controller|kube-scheduler|kubelet|etcd' 2>/dev/null || true
+sleep 2
+
+echo "=== flushing stale iptables/IPVS rules from prior CNI runs ==="
+iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X \
+  && iptables -t mangle -F && iptables -t mangle -X || true
+ip6tables -F && ip6tables -X && ip6tables -t nat -F && ip6tables -t nat -X \
+  && ip6tables -t mangle -F && ip6tables -t mangle -X || true
+if ipvsadm -l &>/dev/null; then ipvsadm --clear || true; fi
+
 echo "=== containerd ==="
 apt-get update -qq
 apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
@@ -493,6 +509,13 @@ mkdir -p /etc/containerd
 containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = true/SystemdCgroup = false/' /etc/containerd/config.toml
 systemctl restart containerd && systemctl enable containerd
+echo "Waiting for containerd socket..."
+for i in \$(seq 1 15); do
+  [ -S /run/containerd/containerd.sock ] && break
+  sleep 2
+done
+[ -S /run/containerd/containerd.sock ] || { echo "ERROR: containerd socket never appeared" >&2; exit 1; }
+
 echo "=== kernel settings ==="
 modprobe br_netfilter overlay
 cat > /etc/sysctl.d/99-k8s.conf << 'EOF'
@@ -505,7 +528,7 @@ swapoff -a && sed -i '/swap/d' /etc/fstab
 echo "=== kubeadm ==="
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key \
-  | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  | gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' \
   > /etc/apt/sources.list.d/kubernetes.list
 apt-get update -qq
