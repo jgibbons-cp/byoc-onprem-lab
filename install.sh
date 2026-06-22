@@ -237,11 +237,17 @@ PY
 
   local poll_count=0
   while true; do
-    local status
-    status=$(aws ssm get-command-invocation \
+    local status poll_raw
+    poll_raw=$(aws ssm get-command-invocation \
       --command-id "$cmd_id" --instance-id "$instance" \
       --region "$REGION" --profile "$PROFILE" \
-      --query "Status" --output text 2>/dev/null) || status="InProgress"
+      --query "Status" --output text 2>&1) || true
+    if echo "$poll_raw" | grep -qi "ExpiredToken\|AuthFailure\|InvalidClientTokenId"; then
+      # Refresh inline — the command is already running on the remote, no need to re-send
+      validate_creds >&2
+      continue
+    fi
+    status="$poll_raw"
     [[ "$status" != "InProgress" && "$status" != "Pending" ]] && break
     ((poll_count++)) || true
     if [[ "$poll_count" -ge 600 ]]; then
@@ -255,11 +261,19 @@ PY
   out=$(aws ssm get-command-invocation \
     --command-id "$cmd_id" --instance-id "$instance" \
     --region "$REGION" --profile "$PROFILE" \
-    --query "StandardOutputContent" --output text 2>/dev/null)
+    --query "StandardOutputContent" --output text 2>&1) || out=""
+  # Creds can expire between poll and output fetch — refresh and retry once
+  if echo "$out" | grep -qi "ExpiredToken\|AuthFailure\|InvalidClientTokenId"; then
+    validate_creds >&2
+    out=$(aws ssm get-command-invocation \
+      --command-id "$cmd_id" --instance-id "$instance" \
+      --region "$REGION" --profile "$PROFILE" \
+      --query "StandardOutputContent" --output text 2>/dev/null) || out=""
+  fi
   rc=$(aws ssm get-command-invocation \
     --command-id "$cmd_id" --instance-id "$instance" \
     --region "$REGION" --profile "$PROFILE" \
-    --query "ResponseCode" --output text 2>/dev/null)
+    --query "ResponseCode" --output text 2>/dev/null) || rc=""
 
   echo "$out"
   [[ "$rc" == "0" ]]
@@ -268,18 +282,26 @@ PY
 # Run script on instance with spinner
 ssm_run() {
   local instance="$1" script_file="$2" label="${3:-}"
-  local t0=$SECONDS output
-  output=$(_ssm_send "$instance" "$script_file") || {
+  local t0=$SECONDS output retried=false
+
+  while true; do
+    output=$(_ssm_send "$instance" "$script_file") && break
+
+    # Expired token before/during send-command: refresh and retry once automatically
+    if [[ "$retried" == "false" ]] && \
+        echo "$output" | grep -qi "ExpiredToken\|expired token\|AuthFailure\|InvalidClientTokenId"; then
+      spin_stop >&2
+      validate_creds >&2
+      echo -e "  ${DIM}Session refreshed — retrying...${NC}\n" >&2
+      retried=true
+      continue
+    fi
+
+    # Real failure — log and show targeted guidance
     spin_stop >&2
     local logfile="${CKPT_DIR}/error_$(basename "$script_file" .sh)_$(date +%H%M%S).log"
     echo "$output" > "$logfile"
-    # Detect the two most common failure modes and give targeted guidance
-    if echo "$output" | grep -qi "ExpiredToken\|expired token\|AuthFailure\|InvalidClientTokenId"; then
-      echo -e "\n  ${RED}${BOLD} ✗  AWS SSO session expired${NC}\n" >&2
-      echo -e "  ${YELLOW}Your SSO session expired while the installer was running.${NC}" >&2
-      echo -e "  Re-authenticate, then re-run — completed phases will be skipped.\n" >&2
-      echo -e "  ${CYAN}  aws sso login --profile ${PROFILE}${NC}" >&2
-    elif echo "$output" | grep -qi "InvalidInstanceId\|not.*registered\|TargetNotConnected"; then
+    if echo "$output" | grep -qi "InvalidInstanceId\|not.*registered\|TargetNotConnected"; then
       echo -e "\n  ${RED}${BOLD} ✗  Instance not reachable via SSM${NC}\n" >&2
       echo -e "  ${YELLOW}The instance is not registered with SSM yet (can take 3-5 min after launch).${NC}" >&2
       echo -e "  Re-run in a minute — the checkpoint system will skip completed phases.\n" >&2
@@ -293,7 +315,8 @@ ssm_run() {
     echo -e "\n  ${DIM}Full log: ${logfile}${NC}\n" >&2
     printf "${SHOW_CURSOR}" >&2
     exit 1
-  }
+  done
+
   spin_stop "${label}" >&2
   echo $((SECONDS - t0))
 }
@@ -310,15 +333,26 @@ validate_creds() {
   aws sts get-caller-identity --profile "$PROFILE" --region "$REGION" \
     > /dev/null 2>&1 && return 0
 
+  local sso_url
+  sso_url=$(aws configure get sso_start_url --profile "$PROFILE" 2>/dev/null || true)
+
   echo ""
-  warn "AWS SSO session expired — re-authenticating..."
+  echo -e "  ${RED}${BOLD} ✗  AWS SSO session expired${NC}"
+  echo ""
+  if [[ -n "$sso_url" ]]; then
+    echo -e "  ${YELLOW}Your SSO portal (open this if the browser doesn't launch automatically):${NC}"
+    echo -e "  ${CYAN}${BOLD}  ${sso_url}${NC}"
+    echo ""
+  fi
+  echo -e "  ${YELLOW}Opening SSO login — approve the request in your browser, then return here.${NC}"
+  echo -e "  ${DIM}  (aws sso login --profile ${PROFILE})${NC}"
   echo ""
   aws sso login --profile "$PROFILE" \
-    || abort "SSO login failed. Re-run after authenticating: aws sso login --profile ${PROFILE}"
+    || abort "SSO login failed. Open ${sso_url:-your SSO portal} and re-run: aws sso login --profile ${PROFILE}"
   echo ""
   aws sts get-caller-identity --profile "$PROFILE" --region "$REGION" > /dev/null 2>&1 \
-    || abort "Still not authenticated. Run: aws sso login --profile ${PROFILE}"
-  success "SSO session refreshed."
+    || abort "Still not authenticated after login. Run: aws sso login --profile ${PROFILE}"
+  success "SSO session refreshed — resuming."
 }
 
 get_private_ip() {
