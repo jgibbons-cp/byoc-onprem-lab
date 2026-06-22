@@ -330,12 +330,73 @@ list_ssm_instances() {
     --output text --region "$REGION" --profile "$PROFILE" 2>/dev/null
 }
 
+detect_byoc_instance() {
+  local tag_role="$1"
+  aws ec2 describe-instances \
+    --filters \
+      "Name=tag:Project,Values=byoc-cloudprem-lab" \
+      "Name=tag:byoc-role,Values=${tag_role}" \
+      "Name=instance-state-name,Values=running" \
+    --query "Reservations[*].Instances[*].InstanceId" \
+    --output text --region "$REGION" --profile "$PROFILE" 2>/dev/null \
+    | tr '\t' '\n' | grep -v '^$' || true
+}
+
 pick_instance() {
-  local role="$1" varname="$2"
+  local role="$1" varname="$2" tag_role="${3:-}"
   local rows last_var="LAST_${varname}"
   local last_id="${!last_var:-}"
-  rows=$(list_ssm_instances)
 
+  if [[ "${BYOC_YES:-}" == "1" ]]; then
+    rows=$(list_ssm_instances)
+    local envvar="BYOC_${varname}"
+    local preset="${!envvar:-$last_id}"
+    [[ -z "$preset" ]] && abort "BYOC_YES=1 requires $envvar env var (instance ID for $role)"
+    printf -v "$varname" '%s' "$preset"
+    printf "  ${WHITE}%-40s${NC}: ${DIM}%s (env)${NC}\n" "Select $role instance" "$preset"
+    return
+  fi
+
+  # Auto-detect instances tagged by launch_instances.sh
+  if [[ -n "$tag_role" ]]; then
+    local detected
+    detected=$(detect_byoc_instance "$tag_role")
+    local count
+    count=$(echo "$detected" | grep -c '^i-' 2>/dev/null || echo 0)
+    if [[ "$count" -eq 1 ]]; then
+      local auto_id="$detected"
+      local auto_ip
+      auto_ip=$(get_private_ip "$auto_id")
+      printf -v "$varname" '%s' "$auto_id"
+      success "Auto-detected $role: ${auto_id}  ${DIM}(${auto_ip})${NC}"
+      return
+    elif [[ "$count" -gt 1 ]]; then
+      echo -e "\n  ${YELLOW}Multiple byoc-${tag_role} instances found — select one:${NC}\n"
+      local i=1
+      declare -a ids=()
+      while IFS= read -r id; do
+        [[ -z "$id" ]] && continue
+        local ip; ip=$(get_private_ip "$id")
+        local marker=""
+        [[ "$id" == "$last_id" ]] && marker=" ${GREEN}← last used${NC}"
+        printf "  ${CYAN}[%d]${NC}  %-22s  ${DIM}%-16s${NC}%b\n" "$i" "$id" "$ip" "$marker"
+        ids+=("$id")
+        ((i++)) || true
+      done <<< "$detected"
+      echo ""
+      local choice
+      ask "Select $role instance (number or i-...)" "${last_id}" choice
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#ids[@]}" ]]; then
+        printf -v "$varname" '%s' "${ids[$((choice-1))]}"
+      else
+        printf -v "$varname" '%s' "$choice"
+      fi
+      return
+    fi
+  fi
+
+  # Fallback: show all SSM-online instances
+  rows=$(list_ssm_instances)
   if [[ -z "$rows" ]]; then
     ask "No SSM instances found. Enter $role instance ID" "$last_id" "$varname"
     return
@@ -354,14 +415,6 @@ pick_instance() {
   echo ""
 
   local choice
-  if [[ "${BYOC_YES:-}" == "1" ]]; then
-    local envvar="BYOC_${varname}"
-    local preset="${!envvar:-$last_id}"
-    [[ -z "$preset" ]] && abort "BYOC_YES=1 requires $envvar env var (instance ID for $role)"
-    printf -v "$varname" '%s' "$preset"
-    printf "  ${WHITE}%-40s${NC}: ${DIM}%s (env)${NC}\n" "Select $role instance" "$preset"
-    return
-  fi
   ask "Select $role instance (number or i-...)" "${last_id}" choice
   if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#ids[@]}" ]]; then
     printf -v "$varname" '%s' "${ids[$((choice-1))]}"
@@ -870,7 +923,7 @@ validate_creds
 echo ""
 
 info "Fetching available SSM instances..."
-pick_instance "Kubernetes node" K8S_INSTANCE
+pick_instance "Kubernetes node" K8S_INSTANCE k8s
 echo ""
 
 # Re-key checkpoint dir now that K8S_INSTANCE is known
@@ -888,7 +941,7 @@ if [[ -f "$CKPT_DIR/config.env" ]]; then
   source "$CKPT_DIR/config.env"
   RESUMING=1
 else
-  pick_instance "PostgreSQL node" PG_INSTANCE
+  pick_instance "PostgreSQL node" PG_INSTANCE postgres
   [[ "$K8S_INSTANCE" == "$PG_INSTANCE" ]] && \
     abort "K8S and PostgreSQL instances must be different — you selected the same instance for both."
 

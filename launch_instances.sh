@@ -245,7 +245,7 @@ K8S_INSTANCE_ID=$(aws ec2 run-instances \
   --security-group-ids "$SG_ID" \
   --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${K8S_DISK},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
   --metadata-options "HttpTokens=optional,HttpEndpoint=enabled" \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-k8s},{Key=Project,Value=byoc-cloudprem-lab},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-k8s},{Key=Project,Value=byoc-cloudprem-lab},{Key=byoc-role,Value=k8s},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
   --region "$REGION" --profile "$PROFILE" \
   --query "Instances[0].InstanceId" --output text) \
   || abort "Failed to launch Kubernetes node. Check instance type availability and quotas in $REGION.\nTo check quota: aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region $REGION --profile $PROFILE"
@@ -265,7 +265,7 @@ PG_INSTANCE_ID=$(aws ec2 run-instances \
   --security-group-ids "$SG_ID" \
   --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${PG_DISK},\"VolumeType\":\"gp2\",\"DeleteOnTermination\":true}}]" \
   --metadata-options "HttpTokens=optional,HttpEndpoint=enabled" \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-postgres},{Key=Project,Value=byoc-cloudprem-lab},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-postgres},{Key=Project,Value=byoc-cloudprem-lab},{Key=byoc-role,Value=postgres},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
   --region "$REGION" --profile "$PROFILE" \
   --query "Instances[0].InstanceId" --output text) \
   || abort "Failed to launch PostgreSQL node."
