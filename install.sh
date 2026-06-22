@@ -869,7 +869,7 @@ for i in \$(seq 1 60); do
     echo "\$AUTH_ERR"
     break
   fi
-  [[ $((i % 6)) -eq 0 ]] && echo "  waiting for reverse WebSocket... ($((i * 5))s elapsed)"
+  [[ \$((i % 6)) -eq 0 ]] && echo "  waiting for reverse WebSocket... (\$((i * 5))s elapsed)"
   sleep 5
 done
 if [[ "\$CONNECTED" == "false" ]]; then
@@ -923,8 +923,7 @@ print_dashboard() {
   printf "  ${GREEN}✓${NC}  %-32s  ${DIM}%s${NC}\n"  "CloudPrem"                   "$NAMESPACE namespace"
   printf "  ${GREEN}✓${NC}  %-32s  ${DIM}%s${NC}\n"  "Datadog Operator + Agent"    "log collection active"
   echo ""
-  echo -e "  ${DIM}Note: AWS STS tokens expire every ~1hr. When SSM commands fail,${NC}"
-  echo -e "  ${DIM}paste fresh export block and re-run the aws configure set commands.${NC}"
+  echo -e "  ${DIM}Note: If SSM commands fail with an auth error, re-run: aws sso login --profile ${PROFILE}${NC}"
   echo ""
 }
 
