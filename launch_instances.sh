@@ -155,16 +155,16 @@ if [[ "$EXISTING_PROFILE" == "$PROFILE_NAME" ]]; then
 else
   info "Creating IAM role and instance profile for SSM..."
 
-  # Create role — AlreadyExists is not an error
+  # Create role — AlreadyExists and AccessDenied (role pre-exists) are both acceptable
   CREATE_ROLE_OUT=$(aws iam create-role \
     --role-name "$PROFILE_NAME" \
     --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
     --profile "$PROFILE" --region "$REGION" \
     --output text 2>&1) || {
-      if echo "$CREATE_ROLE_OUT" | grep -q "EntityAlreadyExists"; then
-        true  # expected on re-run
+      if echo "$CREATE_ROLE_OUT" | grep -qE "EntityAlreadyExists|AccessDenied"; then
+        true  # role already exists (or power-user can't create but it was pre-provisioned)
       else
-        abort "Failed to create IAM role: $CREATE_ROLE_OUT"
+        abort "Failed to create IAM role:\n  $CREATE_ROLE_OUT"
       fi
     }
 
@@ -186,17 +186,29 @@ else
     --role-name "$PROFILE_NAME" \
     --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
 
-  # Verify the profile actually exists and has the role attached before continuing
+  # Verify the profile actually exists and has a role attached before continuing
   VERIFY=$(aws iam get-instance-profile \
     --instance-profile-name "$PROFILE_NAME" \
     --profile "$PROFILE" --region "$REGION" \
     --query "InstanceProfile.Roles[0].RoleName" --output text 2>/dev/null || true)
-  [[ "$VERIFY" == "$PROFILE_NAME" ]] \
-    || abort "Instance profile creation failed or role not attached. Check IAM permissions:\n  Required: iam:CreateRole, iam:AttachRolePolicy, iam:CreateInstanceProfile, iam:AddRoleToInstanceProfile"
 
-  # IAM is eventually consistent
-  info "Waiting for IAM to propagate..."
-  sleep 10
+  if [[ -z "$VERIFY" || "$VERIFY" == "None" ]]; then
+    abort "Instance profile '${PROFILE_NAME}' does not exist or has no role attached.\n\
+  Your AWS role may lack iam:CreateRole. Ask an admin to run once:\n\
+\n\
+    aws iam create-role --role-name ${PROFILE_NAME} \\\n\
+      --assume-role-policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}'\n\
+    aws iam attach-role-policy --role-name ${PROFILE_NAME} \\\n\
+      --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore\n\
+    aws iam create-instance-profile --instance-profile-name ${PROFILE_NAME}\n\
+    aws iam add-role-to-instance-profile --instance-profile-name ${PROFILE_NAME} --role-name ${PROFILE_NAME}"
+  fi
+
+  # IAM is eventually consistent — only wait if we just created it
+  if ! echo "$CREATE_ROLE_OUT" | grep -q "AccessDenied"; then
+    info "Waiting for IAM to propagate..."
+    sleep 10
+  fi
   success "Instance profile ready: $PROFILE_NAME"
 fi
 

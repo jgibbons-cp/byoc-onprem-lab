@@ -417,7 +417,8 @@ pick_instance() {
     local detected
     detected=$(detect_byoc_instance "$tag_role")
     local count
-    count=$(echo "$detected" | grep -c '^i-' 2>/dev/null || echo 0)
+    count=$(echo "$detected" | grep -c '^i-' 2>/dev/null || true)
+    count=${count:-0}
     if [[ "$count" -eq 1 ]]; then
       local auto_id="$detected"
       local auto_ip
