@@ -273,12 +273,26 @@ ssm_run() {
     spin_stop >&2
     local logfile="${CKPT_DIR}/error_$(basename "$script_file" .sh)_$(date +%H%M%S).log"
     echo "$output" > "$logfile"
-    echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n" >&2
-    echo -e "${DIM}  Last output:${NC}" >&2
-    echo "$output" | tail -20 | while IFS= read -r line; do
-      echo -e "  ${DIM}${line}${NC}" >&2
-    done
-    echo -e "\n  ${DIM}Full log saved to: ${logfile}${NC}\n" >&2
+    # Detect the two most common failure modes and give targeted guidance
+    if echo "$output" | grep -qi "ExpiredToken\|expired token\|AuthFailure\|InvalidClientTokenId"; then
+      echo -e "\n  ${RED}${BOLD} ✗  AWS credentials expired${NC}\n" >&2
+      echo -e "  ${YELLOW}Your STS token expired while the installer was running.${NC}" >&2
+      echo -e "  Refresh credentials, then re-run — completed phases will be skipped.\n" >&2
+      echo -e "  ${CYAN}  aws configure set aws_access_key_id     \"\$AWS_ACCESS_KEY_ID\"     --profile ${PROFILE}${NC}" >&2
+      echo -e "  ${CYAN}  aws configure set aws_secret_access_key \"\$AWS_SECRET_ACCESS_KEY\" --profile ${PROFILE}${NC}" >&2
+      echo -e "  ${CYAN}  aws configure set aws_session_token     \"\$AWS_SESSION_TOKEN\"     --profile ${PROFILE}${NC}" >&2
+    elif echo "$output" | grep -qi "InvalidInstanceId\|not.*registered\|TargetNotConnected"; then
+      echo -e "\n  ${RED}${BOLD} ✗  Instance not reachable via SSM${NC}\n" >&2
+      echo -e "  ${YELLOW}The instance is not registered with SSM yet (can take 3-5 min after launch).${NC}" >&2
+      echo -e "  Re-run in a minute — the checkpoint system will skip completed phases.\n" >&2
+    else
+      echo -e "\n  ${RED}${BOLD} ✗  Remote command failed${NC}\n" >&2
+      echo -e "${DIM}  Last output:${NC}" >&2
+      echo "$output" | tail -20 | while IFS= read -r line; do
+        echo -e "  ${DIM}${line}${NC}" >&2
+      done
+    fi
+    echo -e "\n  ${DIM}Full log: ${logfile}${NC}\n" >&2
     printf "${SHOW_CURSOR}" >&2
     exit 1
   }
@@ -1033,6 +1047,7 @@ so resuming from a checkpoint is always safe. ✓"
 if ckpt_done "phase1"; then
   success "Phase 1 already completed — skipping."
 else
+  validate_creds
   write_phase1
   spin_start "Bootstrapping Kubernetes"
   elapsed=$(ssm_run "$K8S_INSTANCE" /tmp/byoc_p1.sh) || exit 1
