@@ -216,7 +216,7 @@ _ssm_send() {
   python3 - "$script_file" "$params_file" << 'PY'
 import json, sys
 lines = open(sys.argv[1]).read().splitlines()
-lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
+lines = [l for l in lines if l.strip() and not (l.strip().startswith('#') and not l.strip().startswith('#!'))]
 with open(sys.argv[2], 'w') as f:
     f.write(json.dumps({'commands': lines}))
 PY
@@ -905,7 +905,6 @@ else
     *) warn "Unrecognized Datadog site '${DD_SITE}' — double-check before continuing." ;;
   esac
   echo ""
-  local deploy_id
   deploy_id=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 6)
   echo -e "  ${DIM}The next two values determine your Datadog cluster identifier:${NC}"
   echo -e "  ${DIM}  <namespace>-<namespace>-<cluster-name>${NC}"
