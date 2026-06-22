@@ -257,25 +257,31 @@ PY
     sleep 3
   done
 
-  local out rc
-  out=$(aws ssm get-command-invocation \
+  local stdout stderr rc
+  stdout=$(aws ssm get-command-invocation \
     --command-id "$cmd_id" --instance-id "$instance" \
     --region "$REGION" --profile "$PROFILE" \
-    --query "StandardOutputContent" --output text 2>&1) || out=""
+    --query "StandardOutputContent" --output text 2>&1) || stdout=""
   # Creds can expire between poll and output fetch — refresh and retry once
-  if echo "$out" | grep -qi "ExpiredToken\|AuthFailure\|InvalidClientTokenId"; then
+  if echo "$stdout" | grep -qi "ExpiredToken\|AuthFailure\|InvalidClientTokenId"; then
     validate_creds >&2
-    out=$(aws ssm get-command-invocation \
+    stdout=$(aws ssm get-command-invocation \
       --command-id "$cmd_id" --instance-id "$instance" \
       --region "$REGION" --profile "$PROFILE" \
-      --query "StandardOutputContent" --output text 2>/dev/null) || out=""
+      --query "StandardOutputContent" --output text 2>/dev/null) || stdout=""
   fi
+  stderr=$(aws ssm get-command-invocation \
+    --command-id "$cmd_id" --instance-id "$instance" \
+    --region "$REGION" --profile "$PROFILE" \
+    --query "StandardErrorContent" --output text 2>/dev/null) || stderr=""
   rc=$(aws ssm get-command-invocation \
     --command-id "$cmd_id" --instance-id "$instance" \
     --region "$REGION" --profile "$PROFILE" \
     --query "ResponseCode" --output text 2>/dev/null) || rc=""
 
-  echo "$out"
+  # Combine stdout + stderr so error messages from >&2 are always visible
+  echo "$stdout"
+  [[ -n "$stderr" ]] && echo "$stderr"
   [[ "$rc" == "0" ]]
 }
 
@@ -692,11 +698,12 @@ sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kube
 SECTION="API server wait"
 echo "=== waiting for API server ==="
 API_READY=false
-for i in \$(seq 1 36); do
+for i in \$(seq 1 60); do
   kubectl get nodes 2>/dev/null && API_READY=true && break
+  echo "  [${i}/60] API server not yet ready..." >&2
   sleep 5
 done
-[[ "\$API_READY" == "false" ]] && { echo "ERROR: API server not ready after 180s" >&2; exit 1; }
+[[ "\$API_READY" == "false" ]] && { echo "ERROR: API server not ready after 300s" >&2; exit 1; }
 echo "=== removing control-plane taint (best-effort — Phase 5 taint guard is the safety net) ==="
 for i in \$(seq 1 24); do
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null && break
