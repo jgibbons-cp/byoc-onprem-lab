@@ -158,48 +158,37 @@ No `kubectl`, `helm`, or SSH needed locally. Everything runs remotely via AWS SS
 
 ### AWS credentials
 
-The scripts use a `byoc` AWS profile. Get temporary credentials from the AWS Access Portal and configure the profile with them.
+The scripts use a `byoc` AWS profile. Credentials come from the AWS Access Portal and expire every ~1 hour.
 
-**1. Get credentials from the AWS Access Portal**
-
-Go to your AWS Access Portal, select the account and role you want to use, and click **Access keys**. Choose **Option 2** (set environment variables or add to credentials file directly).
-
-**2. Configure the `byoc` profile**
-
-Add this to `~/.aws/config`:
-
-```ini
-[profile byoc]
-region = us-east-1
-```
-
-Add your credentials to `~/.aws/credentials`:
-
-```ini
-[byoc]
-aws_access_key_id     = ASIA...
-aws_secret_access_key = ...
-aws_session_token     = ...
-```
-
-Or set them in one shot via CLI:
+**One-time config** — run this once to create the profile (if you haven't already):
 
 ```bash
-aws configure set aws_access_key_id     ASIA...  --profile byoc
-aws configure set aws_secret_access_key ...       --profile byoc
-aws configure set aws_session_token     ...       --profile byoc
-aws configure set region                us-east-1 --profile byoc
+aws configure set region us-east-1 --profile byoc
 ```
 
-**3. Verify**
+**Every session** — go to the AWS Access Portal, select your account and role, click **Access keys**, and copy the **Option 1** export block. It looks like:
+
+```bash
+export AWS_ACCESS_KEY_ID="ASIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_SESSION_TOKEN="..."
+```
+
+Paste that into your terminal, then immediately run this to save it to the `byoc` profile:
+
+```bash
+aws configure set aws_access_key_id     "$AWS_ACCESS_KEY_ID"     --profile byoc
+aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile byoc
+aws configure set aws_session_token     "$AWS_SESSION_TOKEN"     --profile byoc
+```
+
+Verify:
 
 ```bash
 aws sts get-caller-identity --profile byoc
 ```
 
-> **Credentials expire after ~1 hour.** When they do, return to the Access Portal, generate a new set, and re-run the configure commands above. The install checkpoint system means you can refresh mid-run and resume without losing progress.
-
-Your role needs: `AmazonSSMFullAccess` + `AmazonEC2FullAccess`. IAM permissions are not required — the `AmazonSSMManagedInstanceCoreProfile` instance profile is already provisioned in the account.
+> **Credentials expire after ~1 hour.** Repeat the export + configure steps above to refresh. The install checkpoint system means you can refresh mid-run and resume without losing progress.
 
 ### Launching instances
 
@@ -368,12 +357,12 @@ For `datadoghq.com`:
 
 ### AWS credentials expired
 
-Temporary credentials from the Access Portal last ~1 hour. If they expire mid-install, the script will surface an auth error. Refresh by going back to the Access Portal, generating a new set of credentials, and running:
+Temporary credentials last ~1 hour. Go back to the AWS Access Portal, copy the **Option 1** export block, paste it into your terminal, then run:
 
 ```bash
-aws configure set aws_access_key_id     ASIA...  --profile byoc
-aws configure set aws_secret_access_key ...       --profile byoc
-aws configure set aws_session_token     ...       --profile byoc
+aws configure set aws_access_key_id     "$AWS_ACCESS_KEY_ID"     --profile byoc
+aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile byoc
+aws configure set aws_session_token     "$AWS_SESSION_TOKEN"     --profile byoc
 ```
 
 Then re-run `bash install.sh` — the checkpoint system picks up where it left off.
