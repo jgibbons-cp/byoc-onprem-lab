@@ -340,14 +340,23 @@ validate_creds() {
   echo -e "  ${RED}${BOLD} ✗  AWS SSO session expired${NC}"
   echo ""
 
-  # Profile not configured for SSO yet — must run configure first
+  # Profile not configured for SSO yet — give complete step-by-step setup
   if [[ -z "$sso_url" ]]; then
     echo -e "  ${YELLOW}The '${PROFILE}' profile is not configured for SSO.${NC}"
-    echo -e "  ${YELLOW}Run this to set it up, then re-run the installer:${NC}"
+    echo -e "  ${YELLOW}Run the following commands to set it up, then re-run the installer:${NC}"
     echo ""
-    echo -e "  ${CYAN}${BOLD}  aws configure sso --profile ${PROFILE}${NC}"
+    echo -e "  ${DIM}# 1. Find your SSO start URL:${NC}"
+    echo -e "  ${DIM}#    Open https://datadoghq.awsapps.com/start  (or check with your IT/Okta portal)${NC}"
+    echo -e "  ${DIM}#    It looks like: https://d-xxxxxxxxxx.awsapps.com/start${NC}"
     echo ""
-    abort "SSO not configured for profile '${PROFILE}'. Run: aws configure sso --profile ${PROFILE}"
+    echo -e "  ${CYAN}${BOLD}  aws configure set sso_start_url https://d-xxxxxxxxxx.awsapps.com/start --profile ${PROFILE}${NC}"
+    echo -e "  ${CYAN}${BOLD}  aws configure set sso_region     us-east-1                              --profile ${PROFILE}${NC}"
+    echo -e "  ${CYAN}${BOLD}  aws configure set region          ${REGION}                             --profile ${PROFILE}${NC}"
+    echo -e "  ${CYAN}${BOLD}  aws sso login --profile ${PROFILE}${NC}"
+    echo ""
+    echo -e "  ${DIM}# (aws sso login will prompt you to pick the account + role the first time)${NC}"
+    echo ""
+    abort "SSO not configured for profile '${PROFILE}' — see commands above"
   fi
 
   echo -e "  ${YELLOW}Your SSO portal (open this if the browser doesn't launch automatically):${NC}"
