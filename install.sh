@@ -1928,3 +1928,28 @@ echo ""
 # ── Done ──────────────────────────────────────────────────────────────────────
 arch_diagram "done"
 print_dashboard
+
+# ── Teardown prompt (dev/iteration helper) ────────────────────────────────────
+echo ""
+echo -e "  ${YELLOW}${BOLD}  Terminate instances?${NC}"
+echo -e "  ${DIM}  K8s:      ${K8S_INSTANCE}${NC}"
+echo -e "  ${DIM}  Postgres: ${PG_INSTANCE}${NC}"
+echo ""
+printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}${DIM}[no]${NC}: " "Terminate both instances now? (yes/no)"
+teardown_resp=""
+read -re teardown_resp < /dev/tty || true
+if [[ "${teardown_resp,,}" == "yes" || "${teardown_resp,,}" == "y" ]]; then
+  info "Terminating instances..."
+  aws ec2 terminate-instances \
+    --instance-ids "$K8S_INSTANCE" "$PG_INSTANCE" \
+    --region "$REGION" --profile "$PROFILE" > /dev/null \
+    && success "Instances terminated. Cleaning up checkpoint..." \
+    || warn "Terminate command failed — check AWS console."
+  rm -rf "$CKPT_DIR"
+  success "Done. Re-run 'bash launch_instances.sh' to start fresh."
+else
+  echo ""
+  echo -e "  ${DIM}Instances left running. To terminate later:${NC}"
+  echo -e "  ${CYAN}  aws ec2 terminate-instances --instance-ids ${K8S_INSTANCE} ${PG_INSTANCE} --region ${REGION} --profile ${PROFILE}${NC}"
+fi
+echo ""
