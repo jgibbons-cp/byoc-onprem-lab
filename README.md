@@ -27,6 +27,8 @@ bash install.sh
 
 The script asks ~8 questions, press **Enter once** to confirm, then runs fully automated end-to-end with live progress, parallel installs, and a checkpoint system that resumes from where it left off if interrupted.
 
+> **Phase 1 takes 12–15 minutes** (package installs + `kubeadm init`). The spinner is running — it's not hung. Don't Ctrl+C.
+
 ---
 
 ## What It Deploys
@@ -265,19 +267,23 @@ kubectl get pods -n kube-system | grep cilium
 ## Cleanup
 
 ```bash
+# Set these to match your deployment (defaults shown)
+export BYOC_REGION=us-east-1
+export BYOC_PROFILE=byoc
+
 # Terminate both EC2 instances (replace with your actual instance IDs)
 aws ec2 terminate-instances \
   --instance-ids <k8s-instance-id> <postgres-instance-id> \
-  --region us-east-1 --profile byoc
+  --region $BYOC_REGION --profile $BYOC_PROFILE
 ```
 
 To find your instance IDs if you've lost them:
 ```bash
 aws ec2 describe-instances \
   --filters "Name=tag:Project,Values=byoc-cloudprem-lab" \
-            "Name=tag:CreatedBy,Values=$(aws sts get-caller-identity --profile byoc --query 'Arn' --output text | sed 's/.*\///')" \
+            "Name=tag:CreatedBy,Values=$(aws sts get-caller-identity --profile $BYOC_PROFILE --query 'Arn' --output text | sed 's/.*\///')" \
   --query 'Reservations[*].Instances[*].[InstanceId,Tags[?Key==`Name`]|[0].Value,State.Name]' \
-  --output table --region us-east-1 --profile byoc
+  --output table --region $BYOC_REGION --profile $BYOC_PROFILE
 ```
 
 ---
