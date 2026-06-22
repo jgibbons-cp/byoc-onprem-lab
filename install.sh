@@ -700,7 +700,7 @@ echo "=== waiting for API server ==="
 API_READY=false
 for i in \$(seq 1 60); do
   kubectl get nodes 2>/dev/null && API_READY=true && break
-  echo "  [${i}/60] API server not yet ready..." >&2
+  echo "  [\${i}/60] API server not yet ready..." >&2
   sleep 5
 done
 [[ "\$API_READY" == "false" ]] && { echo "ERROR: API server not ready after 300s" >&2; exit 1; }
