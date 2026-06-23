@@ -524,6 +524,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
+export KUBECONFIG=/root/.kube/config
 
 SECTION="init"
 
@@ -641,7 +642,22 @@ apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
 SECTION="containerd config"
 mkdir -p /etc/containerd
 containerd config default > /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = true/SystemdCgroup = false/' /etc/containerd/config.toml
+python3 - /etc/containerd/config.toml << 'PYEOF'
+import re, sys
+p = sys.argv[1]
+c = open(p).read()
+c = re.sub(r'SystemdCgroup\s*=\s*false', 'SystemdCgroup = true', c)
+if 'sandbox_image' in c:
+    c = re.sub(r'sandbox_image\s*=\s*"[^"]*"', 'sandbox_image = "registry.k8s.io/pause:3.10"', c)
+else:
+    for hdr in ["[plugins.'io.containerd.cri.v1.runtime']", "[plugins.'io.containerd.grpc.v1.cri']"]:
+        if hdr in c:
+            c = c.replace(hdr, hdr + '\n  sandbox_image = "registry.k8s.io/pause:3.10"', 1)
+            break
+open(p, 'w').write(c)
+PYEOF
+echo "SystemdCgroup after patch: \$(grep SystemdCgroup /etc/containerd/config.toml)"
+echo "sandbox_image after patch: \$(grep sandbox_image /etc/containerd/config.toml | head -1)"
 
 SECTION="containerd start"
 systemctl restart containerd && systemctl enable containerd
@@ -682,7 +698,8 @@ apt-mark hold kubelet kubeadm kubectl
 
 SECTION="helm install"
 echo "=== helm ==="
-DESIRED_VERSION=v3.21.1 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+export DESIRED_VERSION=v3.21.1
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 SECTION="kubeadm init"
 echo "=== kubeadm init ==="
@@ -691,6 +708,8 @@ kubeadm init \
   --pod-network-cidr=10.0.0.0/16 \
   --skip-phases=addon/kube-proxy \
   --ignore-preflight-errors=NumCPU 2>&1 | tee /tmp/kubeadm-init.log
+kubeadm_rc=\${PIPESTATUS[0]}
+[[ \$kubeadm_rc -ne 0 ]] && { echo "ERROR: kubeadm init failed (exit \$kubeadm_rc)" >&2; exit \$kubeadm_rc; }
 mkdir -p /root/.kube
 cp /etc/kubernetes/admin.conf /root/.kube/config
 sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kubernetes/admin.conf
@@ -698,12 +717,12 @@ sed -i "s|https://.*:6443|https://${K8S_IP}:6443|g" /root/.kube/config /etc/kube
 SECTION="API server wait"
 echo "=== waiting for API server ==="
 API_READY=false
-for i in \$(seq 1 60); do
+for i in \$(seq 1 120); do
   kubectl get nodes 2>/dev/null && API_READY=true && break
-  echo "  [\${i}/60] API server not yet ready..." >&2
+  echo "  [\${i}/120] API server not yet ready..." >&2
   sleep 5
 done
-[[ "\$API_READY" == "false" ]] && { echo "ERROR: API server not ready after 300s" >&2; exit 1; }
+[[ "\$API_READY" == "false" ]] && { echo "ERROR: API server not ready after 600s" >&2; exit 1; }
 echo "=== removing control-plane taint (best-effort — Phase 5 taint guard is the safety net) ==="
 for i in \$(seq 1 24); do
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null && break
@@ -914,6 +933,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
+export KUBECONFIG=/root/.kube/config
 
 SECTION="init"
 
