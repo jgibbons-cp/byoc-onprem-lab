@@ -1965,7 +1965,7 @@ echo ""
 printf "  ${CYAN}▶${NC}  ${WHITE}%-38s${NC}${DIM}[no]${NC}: " "Terminate both instances now? (yes/no)"
 teardown_resp=""
 read -re teardown_resp < /dev/tty || true
-if [[ "${teardown_resp,,}" == "yes" || "${teardown_resp,,}" == "y" ]]; then
+if [[ "$(echo "$teardown_resp" | tr '[:upper:]' '[:lower:]')" == "yes" || "$(echo "$teardown_resp" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
   info "Terminating instances..."
   aws ec2 terminate-instances \
     --instance-ids "$K8S_INSTANCE" "$PG_INSTANCE" \
