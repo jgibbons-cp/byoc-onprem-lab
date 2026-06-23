@@ -25,6 +25,7 @@ K8S_TYPE="${BYOC_K8S_TYPE:-m5.4xlarge}"   # m5zn.metal requires dedicated tenanc
 PG_TYPE="${BYOC_PG_TYPE:-t3.micro}"
 K8S_DISK="${BYOC_K8S_DISK:-300}"
 PG_DISK="${BYOC_PG_DISK:-20}"
+EXISTING_SSH_KEY="${BYOC_SSH_KEY:-}"
 
 echo ""
 echo -e "${WHITE}${BOLD}  BYOC CloudPrem — EC2 Instance Launcher${NC}"
@@ -239,6 +240,19 @@ else
   success "Using existing security group: $SG_ID ($SG_NAME)"
 fi
 
+# if EXISTING_SSH_KEY is not empty then allow ssh from this host
+if [ -n "$EXISTING_SSH_KEY" ]; then
+  ip=$(curl -s https://ipinfo.io/ip)
+  aws ec2 authorize-security-group-ingress \
+    --group-id "$SG_ID" \
+    --protocol tcp \
+    --port 22 \
+    --cidr $ip/32 \
+    --region "$REGION" --profile "$PROFILE" \
+    --output text 2> /dev/null
+  echo "Allowing ssh from $ip/32"
+fi
+
 # ── 8. Launch Kubernetes node ─────────────────────────────────────────────────
 
 # set username to differentiate infra in aws ui
@@ -257,7 +271,7 @@ K8S_INSTANCE_ID=$(aws ec2 run-instances \
   --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${K8S_DISK},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
   --metadata-options "HttpTokens=optional,HttpEndpoint=enabled" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-k8s-$username},{Key=Project,Value=byoc-cloudprem-lab},{Key=byoc-role,Value=k8s},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
-  --region "$REGION" --profile "$PROFILE" \
+  --region "$REGION" --profile "$PROFILE" $EXISTING_SSH_KEY \
   --query "Instances[0].InstanceId" --output text) \
   || abort "Failed to launch Kubernetes node. Check instance type availability and quotas in $REGION.\nTo check quota: aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region $REGION --profile $PROFILE"
 
@@ -277,7 +291,7 @@ PG_INSTANCE_ID=$(aws ec2 run-instances \
   --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${PG_DISK},\"VolumeType\":\"gp2\",\"DeleteOnTermination\":true}}]" \
   --metadata-options "HttpTokens=optional,HttpEndpoint=enabled" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=byoc-postgres-$username},{Key=Project,Value=byoc-cloudprem-lab},{Key=byoc-role,Value=postgres},{Key=CreatedBy,Value=${CALLER_EMAIL}}]" \
-  --region "$REGION" --profile "$PROFILE" \
+  --region "$REGION" --profile "$PROFILE" $EXISTING_SSH_KEY \
   --query "Instances[0].InstanceId" --output text) \
   || abort "Failed to launch PostgreSQL node."
 
